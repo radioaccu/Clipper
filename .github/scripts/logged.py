@@ -14,8 +14,12 @@ if args and args[0] == "--warn":
 title, sep, cmd = args[0], args[1], args[2:]
 assert sep == "--"
 tail = collections.deque(maxlen=60)
-proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                        errors="replace", bufsize=1)
+try:
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                            errors="replace", bufsize=1)
+except OSError as e:
+    print(f"::{level} title={title} (kon niet starten)::{' '.join(cmd)}%0A{e}", flush=True)
+    sys.exit(127)
 for line in proc.stdout:
     sys.stdout.write(line)
     sys.stdout.flush()

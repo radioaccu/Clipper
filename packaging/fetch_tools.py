@@ -3,7 +3,7 @@
 Gebruik:  python packaging/fetch_tools.py <win-x64|mac-arm64|mac-x64> <doelmap>
 
 Windows: FFmpeg (gedeelde GPL-build van BtbN), yt-dlp.exe, deno.exe — allemaal van GitHub-releases.
-macOS:   FFmpeg via Homebrew, met al zijn bibliotheken meegenomen door dylibbundler (vereist Homebrew;
+macOS:   FFmpeg via Homebrew ('ffmpeg-full': de gewone 'ffmpeg' mist zscale voor HDR), met al zijn bibliotheken meegenomen door dylibbundler (vereist Homebrew;
          op de GitHub-bouwmachines is dat aanwezig), plus yt-dlp_macos en Deno van GitHub."""
 from __future__ import annotations
 import os
@@ -66,16 +66,19 @@ def fetch_windows(out: Path, tmp: Path) -> None:
 def fetch_mac(out: Path, tmp: Path, arch: str) -> None:
     brew = shutil.which("brew") or "/opt/homebrew/bin/brew"
     env = dict(os.environ, HOMEBREW_NO_AUTO_UPDATE="1", HOMEBREW_NO_INSTALL_CLEANUP="1")
-    subprocess.run([brew, "install", "ffmpeg", "dylibbundler"], check=True, env=env)
+    subprocess.run([brew, "install", "ffmpeg-full", "dylibbundler"], check=True, env=env)
     prefix = subprocess.run([brew, "--prefix"], check=True, capture_output=True, text=True).stdout.strip()
+    # keg-only: staat niet in het gewone Homebrew-pad maar in de eigen map van de formule
+    ffprefix = subprocess.run([brew, "--prefix", "ffmpeg-full"], check=True, capture_output=True,
+                              text=True).stdout.strip()
     for tool in ("ffmpeg", "ffprobe"):
         dst = out / tool
-        shutil.copy2(os.path.realpath(f"{prefix}/bin/{tool}"), dst)
+        shutil.copy2(os.path.realpath(f"{ffprefix}/bin/{tool}"), dst)
         dst.chmod(0o755)
     # Alle Homebrew-bibliotheken mee naar bin/libs en de verwijzingen daarheen omzetten.
     # -s: zoekpad voor @rpath-bibliotheken; stdin leeg + tijdslimiet zodat een vraag nooit eindeloos blijft wachten
     subprocess.run(["dylibbundler", "-cd", "-of", "-b", "-x", str(out / "ffmpeg"), "-x", str(out / "ffprobe"),
-                    "-d", str(out / "libs"), "-p", "@executable_path/libs/", "-s", f"{prefix}/lib"],
+                    "-d", str(out / "libs"), "-p", "@executable_path/libs/", "-s", f"{ffprefix}/lib", "-s", f"{prefix}/lib"],
                    check=True, stdin=subprocess.DEVNULL, timeout=1200)
     # Na het aanpassen zijn de handtekeningen ongeldig; op Apple Silicon start dan niets meer → opnieuw (ad hoc) tekenen.
     for p in list((out / "libs").glob("*")) + [out / "ffmpeg", out / "ffprobe"]:
@@ -84,7 +87,7 @@ def fetch_mac(out: Path, tmp: Path, arch: str) -> None:
     make_exec(out / "yt-dlp")
     unzip_member(download(URLS[f"deno-mac-{arch}"], tmp / "deno.zip"), "deno", out / "deno")
     make_exec(out / "deno")
-    lic = Path(prefix) / "opt" / "ffmpeg" / "LICENSE.md"
+    lic = Path(ffprefix) / "LICENSE.md"
     if lic.is_file():
         shutil.copy2(lic, out / "FFMPEG-LICENSE.txt")
 

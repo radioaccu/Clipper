@@ -63,7 +63,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then MEDIA="$(cygpath -m "$RUNNER_TEMP")/media"; else MEDIA="$RUNNER_TEMP/media"; fi
           echo "MEDIA=$MEDIA" >> "$GITHUB_ENV"
           export PATH="$PWD/build/tools:$PATH"
-          PYTHON=python python .github/scripts/logged.py "Testmateriaal" -- bash tests/make_media.sh "$MEDIA"
+          python .github/scripts/logged.py "Testmateriaal" -- python tests/make_media.py "$MEDIA"
 
       - name: Tests (export, analyse, links, platform) met de meegeleverde FFmpeg
         id: tests
