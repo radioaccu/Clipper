@@ -175,17 +175,16 @@ Mocht de app niet starten: draai `Start_zonder_installeren.command` en stuur de 
 
 ## Wat is getest voor 2.2 (installers)
 
-- Op Linux: de Windows- en Mac-paden, het onderdrukken van consolevensters op Windows, Windows-verboden bestandsnamen
-  (CON, NUL…), het vinden van `ffmpeg.exe`, en het overnemen en bijwerken van de meegeleverde yt-dlp — met nagebootste
-  platformkeuze (10 tests). Alle eerdere tests slagen nog.
-- De Windows-FFmpeg (BtbN, gedeelde GPL-build) heb ik gedownload en gecontroleerd: zscale, tonemap, showwaves,
-  x264, x265 e.d. zitten erin. De downloadlinks van yt-dlp en Deno bestaan.
-- De bouwopdracht is gecontroleerd met actionlint, en de gebruikte GitHub-onderdelen en hun instellingen heb ik
-  nagekeken voor de exacte versies. Een proefrun (`build.py --dry-run`) toont de juiste stappen; het Windows-icoon wordt gemaakt.
-- **Niet getest, want ik heb geen Windows of Mac:** de echte bouw met PyInstaller, Inno Setup en de .dmg, het
-  meenemen van de Homebrew-FFmpeg met dylibbundler, en de app zelf op Windows. Daarom draaien op de bouwmachines
-  automatisch: een controle van de meegeleverde FFmpeg/yt-dlp/Deno (bouw stopt bij problemen), alle tests, en een
-  rooktest met **echte Qt**. De eerste run is dus ook de eerste echte test; de kans is reëel dat ik daarna nog iets moet bijstellen.
+Op de echte bouwmachines van GitHub (Windows Server, macOS 15 Apple Silicon en macOS 15 Intel) draait bij elke bouw:
+- een controle dat de meegeleverde FFmpeg werkt en x264, x265, zscale (HDR) e.d. bevat — inclusief een echte
+  HDR-naar-SDR-codering; de bouw stopt als iets ontbreekt;
+- alle 75 tests (export, crop, FPS, audio/sync, HDR, branding, analyse, links, tracklists, platformgedrag);
+- een rooktest met **echte Qt**: venster, alle 40 instelvelden, inlezen, analyse, invoervelden, DJ-naam renderen,
+  export naar 1080×1350, link + tracklist, project opslaan/openen, afsluiten. Resultaat: 14/14 op alle drie.
+
+Wat een bouwmachine niet kan nabootsen en je dus zelf even moet proberen: de installer echt installeren en openen,
+video afspelen met beeld en geluid, slepen in de tijdlijn en het voorbeeld, drag-and-drop vanuit Finder/Verkenner,
+een echte YouTube-download, en VideoToolbox-export op een echte Mac.
 
 ## Structuur
 
