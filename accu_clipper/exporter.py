@@ -239,7 +239,8 @@ _BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
 def safe_stem(name: str, maxlen: int = 80) -> str:
-    stem = os.path.splitext(os.path.basename(name))[0]
+    # zelf splitsen op / en \ : os.path.basename ziet op Windows 'a:' als stationsletter
+    stem = os.path.splitext(re.split(r"[\\/]", name)[-1])[0]
     stem = unicodedata.normalize("NFC", _BAD.sub("_", stem)).strip(" .")
     stem = (stem[:maxlen].rstrip(" .")) or "clip"
     if stem.split(".")[0].upper() in WINDOWS_RESERVED:      # CON, NUL, COM1 … mogen niet op Windows

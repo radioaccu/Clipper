@@ -33,7 +33,9 @@ def main(d: Path) -> None:
        "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac",
        "E_sync.mp4")
     ff("-f", "lavfi", "-i", "testsrc2=s=640x360:r=25:d=4", "-f", "lavfi", "-i", "sine=f=330:d=4",
-       "-vf", "format=yuv420p10le", "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error",
+       # setparams labelt de beelden zelf als HDR (PQ/BT.2020); alleen de uitvoeropties volstaan niet meer sinds FFmpeg 8
+       "-vf", "format=yuv420p10le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv",
+       "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error",
        "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc", "-c:a", "aac", "F_hdr.mp4")
     ff("-i", "A.mp4", "-an", "-c:v", "copy", "G_noaudio.mp4")
     ff("-i", "A.mp4", "-af", "volume=1.8", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", "H_loud.mp4")
