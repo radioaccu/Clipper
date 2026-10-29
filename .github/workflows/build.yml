@@ -30,6 +30,9 @@ jobs:
         shell: bash
     env:
       HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 != '' }}
+      # Windows-Python schrijft anders in cp1252 en crasht op tekens als ↓ ▶ ✓ ë
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v7
 
@@ -50,24 +53,24 @@ jobs:
           fi
 
       - name: FFmpeg, yt-dlp en Deno ophalen
-        run: python packaging/fetch_tools.py ${{ matrix.target }} build/tools
+        run: python .github/scripts/logged.py "Ophalen" -- python packaging/fetch_tools.py ${{ matrix.target }} build/tools
 
       - name: Hulpprogramma's controleren (bouw stopt als er iets ontbreekt)
-        run: python packaging/verify_tools.py build/tools
+        run: python .github/scripts/logged.py "Controle hulpprogramma's" -- python packaging/verify_tools.py build/tools
 
       - name: Testmateriaal maken
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then MEDIA="$(cygpath -m "$RUNNER_TEMP")/media"; else MEDIA="$RUNNER_TEMP/media"; fi
           echo "MEDIA=$MEDIA" >> "$GITHUB_ENV"
           export PATH="$PWD/build/tools:$PATH"
-          PYTHON=python bash tests/make_media.sh "$MEDIA"
+          PYTHON=python python .github/scripts/logged.py "Testmateriaal" -- bash tests/make_media.sh "$MEDIA"
 
       - name: Tests (export, analyse, links, platform) met de meegeleverde FFmpeg
         id: tests
         continue-on-error: true
         run: |
           export PATH="$PWD/build/tools:$PATH"
-          ACCU_TEST_MEDIA="$MEDIA" python -W ignore -m unittest tests.test_analysis tests.test_export tests.test_links tests.test_platform -v
+          ACCU_TEST_MEDIA="$MEDIA" python .github/scripts/logged.py --warn "Tests" -- python -W ignore -m unittest tests.test_analysis tests.test_export tests.test_links tests.test_platform -v
 
       - name: Rooktest met echte Qt (zonder scherm)
         id: qt
@@ -76,7 +79,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           export PATH="$PWD/build/tools:$PATH"
-          python tests/real_qt_smoke.py "$MEDIA"
+          python .github/scripts/logged.py --warn "Rooktest echte Qt" -- python tests/real_qt_smoke.py "$MEDIA"
 
       - name: Apple-certificaat importeren (alleen als je er een hebt ingesteld)
         if: runner.os == 'macOS' && env.HAS_MAC_CERT == 'true'
@@ -91,7 +94,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: python packaging/build.py --tools build/tools --target ${{ matrix.target }}
+        run: python .github/scripts/logged.py "Bouwen" -- python packaging/build.py --tools build/tools --target ${{ matrix.target }}
 
       - name: Samenvatting
         if: always()
