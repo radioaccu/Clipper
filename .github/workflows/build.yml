@@ -7,6 +7,11 @@ name: Installers bouwen
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Versie voor een release (bijv. v2.2.0). Leeg = alleen bouwen."
+        required: false
+        default: ""
   release:
     types: [published]
   push:
@@ -118,7 +123,7 @@ jobs:
   release:
     name: Release voor vrienden
     needs: build
-    if: ${{ !cancelled() && (github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v')) }}
+    if: ${{ !cancelled() && (github.event_name == 'release' || startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -130,11 +135,13 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           files: out/*
-          name: Radio ACCU Clipper ${{ github.ref_name }}
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Radio ACCU Clipper ${{ inputs.release_tag || github.ref_name }}
           fail_on_unmatched_files: false
           append_body: true
           body: |
-            ## Radio ACCU Clipper ${{ github.ref_name }}
+            ## Radio ACCU Clipper ${{ inputs.release_tag || github.ref_name }}
 
             **Welk bestand heb ik nodig?**
             - **Windows 10/11:** `…-Windows-Setup.exe` (installer). Liever niets installeren? `…-Windows-portable.zip` uitpakken en `Radio ACCU Clipper.exe` starten.
