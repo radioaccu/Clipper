@@ -1,0 +1,144 @@
+# Bouwt automatisch de installers op echte Windows- en Mac-computers van GitHub (gratis voor openbare
+# repositories; voor privé-repositories binnen het gratis maandtegoed).
+#   • Handmatig: tabblad Actions → "Installers bouwen" → "Run workflow". Downloads staan onderaan de run.
+#   • Release voor vrienden: Releases → "Draft a new release" → tag zoals v2.2.0 → "Publish release".
+#     Dan worden de installers gebouwd en automatisch aan die release toegevoegd (zie README_NL.md).
+name: Installers bouwen
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: win-x64, label: "Windows" }
+          - { os: macos-15, target: mac-arm64, label: "Mac (Apple Silicon)" }
+          - { os: macos-15-intel, target: mac-x64, label: "Mac (Intel)" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Python-pakketten installeren
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt "pyinstaller>=6.10" Pillow
+
+      - name: Inno Setup klaarzetten (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if [ ! -f "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ]; then
+            choco install innosetup -y --no-progress
+          fi
+
+      - name: FFmpeg, yt-dlp en Deno ophalen
+        run: python packaging/fetch_tools.py ${{ matrix.target }} build/tools
+
+      - name: Hulpprogramma's controleren (bouw stopt als er iets ontbreekt)
+        run: python packaging/verify_tools.py build/tools
+
+      - name: Testmateriaal maken
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then MEDIA="$(cygpath -m "$RUNNER_TEMP")/media"; else MEDIA="$RUNNER_TEMP/media"; fi
+          echo "MEDIA=$MEDIA" >> "$GITHUB_ENV"
+          export PATH="$PWD/build/tools:$PATH"
+          PYTHON=python bash tests/make_media.sh "$MEDIA"
+
+      - name: Tests (export, analyse, links, platform) met de meegeleverde FFmpeg
+        id: tests
+        continue-on-error: true
+        run: |
+          export PATH="$PWD/build/tools:$PATH"
+          ACCU_TEST_MEDIA="$MEDIA" python -W ignore -m unittest tests.test_analysis tests.test_export tests.test_links tests.test_platform -v
+
+      - name: Rooktest met echte Qt (zonder scherm)
+        id: qt
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          export PATH="$PWD/build/tools:$PATH"
+          python tests/real_qt_smoke.py "$MEDIA"
+
+      - name: Apple-certificaat importeren (alleen als je er een hebt ingesteld)
+        if: runner.os == 'macOS' && env.HAS_MAC_CERT == 'true'
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.MAC_CERT_PASSWORD }}
+
+      - name: App en installer bouwen
+        env:
+          MAC_SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: python packaging/build.py --tools build/tools --target ${{ matrix.target }}
+
+      - name: Samenvatting
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.label }}"
+            echo "- Tests: ${{ steps.tests.outcome }}"
+            echo "- Rooktest met echte Qt: ${{ steps.qt.outcome }}"
+            echo "- Installers:"
+            ls -1 build/installers 2>/dev/null | sed 's/^/  - /' || echo "  - (geen)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ matrix.target }}
+          path: build/installers/*
+          if-no-files-found: error
+
+  release:
+    name: Release voor vrienden
+    needs: build
+    if: ${{ !cancelled() && github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: out
+          pattern: installer-*
+          merge-multiple: true
+      - run: ls -la out
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: out/*
+          fail_on_unmatched_files: false
+          append_body: true
+          body: |
+            ## Radio ACCU Clipper ${{ github.ref_name }}
+
+            **Welk bestand heb ik nodig?**
+            - **Windows 10/11:** `…-Windows-Setup.exe` (installer). Liever niets installeren? `…-Windows-portable.zip` uitpakken en `Radio ACCU Clipper.exe` starten.
+            - **Mac met M1/M2/M3/M4-chip:** `…-Mac-AppleSilicon.dmg`
+            - **Mac met Intel-processor:** `…-Mac-Intel.dmg`
+            (Mac: Apple-menu → Over deze Mac → Chip of Processor. Vereist macOS 15 Sequoia of nieuwer.)
+
+            **Eerste keer openen**
+            - Windows toont mogelijk "Windows heeft uw pc beschermd": klik op *Meer informatie* → *Toch uitvoeren*.
+            - Mac: sleep de app naar Programma's. Meldt macOS dat de app niet geverifieerd is: klik *Gereed*, open
+              Systeeminstellingen → Privacy en beveiliging en klik onderaan op *Open toch*.
+
+            Alles (FFmpeg, yt-dlp, Deno) zit erin; Python of andere installaties zijn niet nodig.

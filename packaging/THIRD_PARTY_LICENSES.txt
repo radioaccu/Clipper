@@ -1,0 +1,21 @@
+Radio ACCU Clipper bevat de volgende vrije programma's, elk onder hun eigen licentie.
+Ze worden als losse programma's meegeleverd en niet gewijzigd.
+
+FFmpeg / ffprobe — https://ffmpeg.org
+  Gebouwd met GPL-onderdelen (o.a. x264, x265), dus onder de GNU GPL versie 3.
+  Broncode: https://ffmpeg.org/download.html
+  Windows-build: https://github.com/BtbN/FFmpeg-Builds  ·  Mac-build: Homebrew (https://github.com/Homebrew/homebrew-core)
+  Zie FFMPEG-LICENSE.txt in deze map.
+
+yt-dlp — https://github.com/yt-dlp/yt-dlp
+  The Unlicense (publiek domein).
+
+Deno — https://github.com/denoland/deno
+  MIT-licentie.
+
+Qt for Python (PySide6) en Qt — https://www.qt.io/qt-for-python
+  GNU LGPL versie 3. De Qt-bibliotheken staan als losse bestanden in de app en kunnen worden vervangen.
+  Broncode: https://code.qt.io
+
+Python — https://www.python.org  ·  Python Software Foundation License.
+NumPy — https://numpy.org  ·  BSD-licentie.

@@ -1,0 +1,17 @@
+Radio ACCU Clipper installeren
+==============================
+
+1. Sleep "Radio ACCU Clipper" naar de map "Applications" (Programma's) hiernaast.
+2. Open de app vanuit Programma's.
+
+Melding "Apple kon niet verifiëren…" of "kan niet worden geopend"?
+De app is gratis en niet bij Apple geregistreerd (dat kost 99 dollar per jaar). Zo open je hem toch:
+
+  a. Klik in de melding op "Gereed" (niet op "Verplaats naar prullenmand").
+  b. Open Systeeminstellingen → Privacy en beveiliging.
+  c. Scrol naar beneden: bij "Radio ACCU Clipper werd geblokkeerd" klik je op "Open toch".
+  d. Bevestig met je wachtwoord of Touch ID. Daarna opent de app voortaan gewoon.
+
+Vereist: macOS 15 (Sequoia) of nieuwer.
+Kies het juiste bestand: "AppleSilicon" voor Macs met een M1/M2/M3/M4-chip, "Intel" voor oudere Macs
+(Apple-menu → Over deze Mac → Chip of Processor).
