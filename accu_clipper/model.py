@@ -8,7 +8,27 @@ from typing import Any
 
 from .ffmpeg_tools import SourceInfo
 
-OUT_W, OUT_H = 1080, 1350          # vaste exportmaat (4:5)
+# Beeldformaten: sleutel → (breedte, hoogte, label, uitleg). De korte zijde is altijd 1080 px.
+FORMATS: dict[str, tuple[int, int, str, str]] = {
+    "4x5": (1080, 1350, "4:5 staand · 1080 × 1350 (standaard)", "Instagram-post in de feed; neemt de meeste ruimte in."),
+    "9x16": (1080, 1920, "9:16 verticaal · 1080 × 1920", "Reels, TikTok, Stories en YouTube Shorts."),
+    "3x4": (1080, 1440, "3:4 staand · 1080 × 1440", "Instagram-post zoals het profielraster hem toont."),
+    "1x1": (1080, 1080, "1:1 vierkant · 1080 × 1080", "Vierkante post; past overal."),
+    "16x9": (1920, 1080, "16:9 liggend · 1920 × 1080", "YouTube, websites, schermen; liggende video's houden hun volledige beeld."),
+}
+DEFAULT_FORMAT = "4x5"
+OUT_W, OUT_H = FORMATS[DEFAULT_FORMAT][:2]      # standaardmaat (4:5)
+
+
+def format_size(key: str | None) -> tuple[int, int]:
+    """(breedte, hoogte) van een formaat; onbekend → standaard 4:5."""
+    w, h, _, _ = FORMATS.get(key or DEFAULT_FORMAT, FORMATS[DEFAULT_FORMAT])
+    return w, h
+
+
+def format_tag(key: str) -> str:
+    """'9x16' → '9x16' (veilig in bestandsnamen)."""
+    return key if key in FORMATS else DEFAULT_FORMAT
 PROJECT_VERSION = 3
 DEFAULT_CAPTION = "{title}\n\n🎧 {dj}\n📻 Radio ACCU\n\n#radioaccu #djset #livemix"
 
@@ -43,6 +63,8 @@ class Look:
 @dataclass
 class ExportSettings:
     """Per set instelbaar: kwaliteit, audio-export en branding."""
+    out_format: str = DEFAULT_FORMAT   # hoofdformaat (ook in het voorbeeld), zie FORMATS
+    extra_formats: list = field(default_factory=list)   # extra formaten die tegelijk worden geëxporteerd
     profile: str = "very_high"     # zie QUALITY_PROFILES
     encoder: str = "libx264"       # libx264 | h264_videotoolbox
     crf: int = 10
@@ -63,7 +85,7 @@ class ExportSettings:
     logo_path: str = ""
     logo_cx: float = 0.86          # midden van logo, als fractie van de frame-breedte/hoogte
     logo_cy: float = 0.075
-    logo_width: float = 0.18       # fractie van frame-breedte
+    logo_width: float = 0.18       # fractie van de korte zijde van het kader (bij 4:5 = de breedte)
     logo_opacity: float = 1.0
     dj_name: str = ""
     dj_cx: float = 0.5
@@ -77,7 +99,7 @@ class ExportSettings:
     audio_visual: str = "waveform"   # "waveform" (golfvorm op zwart) | "black"
     wave_color: str = "#5AAAFF"
     # extra's bij elke geëxporteerde clip
-    export_cover: bool = False       # omslagfoto (JPG, 1080×1350) uit het midden van de clip
+    export_cover: bool = False       # omslagfoto (JPG, in het formaat van de clip) uit het midden van de clip
     caption_enabled: bool = False    # tekstbestand met Instagram-bijschrift
     caption_template: str = DEFAULT_CAPTION
 
@@ -98,7 +120,7 @@ QUALITY_PROFILES: dict[str, dict[str, Any]] = {
                          "doorgaans lagere kwaliteit dan software-encoding."),
     "lossless": dict(label="Mathematisch lossless (zeer groot)", encoder="libx264", crf=0, preset="veryfast",
                      lossless=True,
-                     help="Geen enkel kwaliteitsverlies in de gecodeerde 1080×1350-frames. Bestanden zijn "
+                     help="Geen enkel kwaliteitsverlies in de gecodeerde frames. Bestanden zijn "
                           "enorm (vaak meer dan 100 Mbit/s) en spelen niet af in QuickTime, iPhone of "
                           "Instagram. Alleen voor archivering of verdere bewerking."),
     "custom": dict(label="Aangepast (geavanceerd)", encoder="libx264", crf=10, preset="slow", lossless=False,
@@ -106,6 +128,16 @@ QUALITY_PROFILES: dict[str, dict[str, Any]] = {
 }
 PRESETS = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
 FPS_OPTIONS = ["source", "24", "25", "30", "50", "60"]
+
+
+def export_formats(st: "ExportSettings") -> list[str]:
+    """Hoofdformaat eerst, dan de extra formaten (zonder dubbelen of onbekende waarden)."""
+    main = st.out_format if st.out_format in FORMATS else DEFAULT_FORMAT
+    out = [main]
+    for f in st.extra_formats or []:
+        if f in FORMATS and f not in out:
+            out.append(f)
+    return out
 
 
 def apply_profile(st: ExportSettings, key: str) -> None:

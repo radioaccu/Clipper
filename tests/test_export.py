@@ -133,6 +133,117 @@ class TestFormat(ExportBase):
         self.assertTrue(is_color(im.getpixel((10, 675)), "blue"))
 
 
+class TestFormats(ExportBase):
+    """Andere beeldformaten: 9:16, 3:4, 1:1, 16:9 (en 4:5 als standaard)."""
+    SIZES = {"4x5": (1080, 1350), "9x16": (1080, 1920), "3x4": (1080, 1440), "1x1": (1080, 1080), "16x9": (1920, 1080)}
+
+    def first_last_nonblack(self, im, x, n):
+        col = [im.getpixel((x, y)) for y in range(n)]
+        first = next(y for y, p in enumerate(col) if not is_color(p, "black", 30))
+        last = max(y for y, p in enumerate(col) if not is_color(p, "black", 30))
+        return first, last
+
+    def test_every_format_exact_size_fill_and_fit(self):
+        for fmt, (W, H) in self.SIZES.items():
+            for mode in ("fill", "fit"):
+                src = make_source("A.mp4", fast_settings(out_format=fmt))
+                out = self.export(src, Clip(start=1, end=2, look=Look(crop_mode=mode)))
+                v = self.vstream(out)
+                self.assertEqual((v["width"], v["height"]), (W, H), f"{fmt} {mode}")
+                self.assertRegex(os.path.basename(out), rf"_{fmt}(_\d+)?\.mp4$")   # _2 enz.: nooit overschrijven
+
+    def test_16x9_keeps_full_landscape_image(self):
+        src = make_source("A.mp4", fast_settings(out_format="16x9"))     # links rood, rechts blauw
+        out = self.export(src, Clip(start=1, end=2))
+        im = frame_at(out, 0.4, os.path.join(self.tmp, "f.png"))
+        self.assertTrue(is_color(im.getpixel((20, 540)), "red"))
+        self.assertTrue(is_color(im.getpixel((1900, 540)), "blue"))
+        self.assertTrue(is_color(im.getpixel((960, 5)), "red") or is_color(im.getpixel((960, 5)), "blue"))  # geen balk
+
+    def test_9x16_fit_has_bars_top_and_bottom(self):
+        src = make_source("A.mp4", fast_settings(out_format="9x16"))
+        out = self.export(src, Clip(start=1, end=2, look=Look(crop_mode="fit")))
+        im = frame_at(out, 0.4, os.path.join(self.tmp, "f.png"))
+        first, last = self.first_last_nonblack(im, 100, 1920)
+        self.assertAlmostEqual(last - first + 1, 607, delta=4)          # 1080 × 1080/1920
+        self.assertAlmostEqual(first, (1920 - 607) // 2, delta=4)
+
+    def test_9x16_fill_crops_sides_with_offset(self):
+        src = make_source("A.mp4", fast_settings(out_format="9x16"))
+        for fx, colour in ((0.0, "red"), (1.0, "blue")):
+            out = self.export(src, Clip(start=1, end=2, look=Look(fx=fx)))
+            im = frame_at(out, 0.4, os.path.join(self.tmp, "f.png"))
+            self.assertTrue(is_color(im.getpixel((10, 960)), colour), f"fx={fx}")
+            self.assertTrue(is_color(im.getpixel((1070, 960)), colour), f"fx={fx}")
+
+    def test_portrait_source_in_16x9_fit_has_side_bars(self):
+        src = make_source("B_rot.mp4", fast_settings(out_format="16x9"))   # staand 1080×1920
+        out = self.export(src, Clip(start=1, end=2, look=Look(crop_mode="fit")))
+        im = frame_at(out, 0.4, os.path.join(self.tmp, "f.png"))
+        self.assertTrue(is_color(im.getpixel((100, 540)), "black", 30))
+        self.assertTrue(is_color(im.getpixel((1820, 540)), "black", 30))
+        self.assertFalse(is_color(im.getpixel((960, 5)), "black", 30))
+
+    def test_logo_same_size_in_every_format(self):
+        logo = os.path.join(self.tmp, "logo_fmt.png")
+        Image.new("RGBA", (200, 200), (0, 255, 0, 255)).save(logo)
+        for fmt, (W, H) in (("16x9", (1920, 1080)), ("9x16", (1080, 1920))):
+            st = fast_settings(out_format=fmt, logo_path=logo, logo_cx=0.5, logo_cy=0.5, logo_width=0.25)
+            out = self.export(make_source("A.mp4", st), Clip(start=1, end=2, look=Look(fx=0.0)))
+            im = frame_at(out, 0.4, os.path.join(self.tmp, "l.png"))
+            row = [is_color(im.getpixel((x, H // 2)), "green", 60) for x in range(W)]
+            width = sum(row)
+            self.assertAlmostEqual(width, 270, delta=6, msg=fmt)     # 25 % van de korte zijde (1080)
+            self.assertTrue(row[W // 2], fmt)
+
+    def test_audio_only_in_16x9(self):
+        out_png = os.path.join(self.tmp, "ao.png")
+        mp3 = os.path.join(self.tmp, "ao.m4a")
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", os.path.join(MEDIA, "S_synthset.mp4"), "-t", "130", "-vn",
+                        "-c:a", "aac", mp3], check=True)
+        src = make_source("A.mp4", fast_settings(out_format="16x9"))
+        src.path = mp3
+        from accu_clipper.ffmpeg_tools import probe as _probe
+        src.info = _probe(mp3)
+        self.assertTrue(src.info.audio_only)
+        out = self.export(src, Clip(start=100, end=103))
+        self.assertEqual((self.vstream(out)["width"], self.vstream(out)["height"]), (1920, 1080))
+        cmd = ex.build_still_command(FFMPEG, src.info, 100, Look(), src.settings, [], out_png)
+        subprocess.run(cmd, check=True, capture_output=True)
+        with Image.open(out_png) as im:
+            self.assertEqual(im.size, (1920, 1080))
+
+    def test_multiple_formats_in_one_queue(self):
+        d = tempfile.mkdtemp(prefix="accu_fmt_")
+        src = make_source("A.mp4", fast_settings(out_format="4x5", extra_formats=["16x9", "9x16", "4x5", "onzin"]))
+        jobs = ex.expand_jobs([(src, Clip(start=1, end=2), 1)])
+        self.assertEqual([ex.job_format(j) for j in jobs], ["4x5", "16x9", "9x16"])   # geen dubbelen of onzin
+        res = ex.run_queue(FFMPEG, jobs, d)
+        self.assertTrue(all(r.ok for r in res), [r.error for r in res])
+        sizes = {r.fmt: (self.vstream(r.path)["width"], self.vstream(r.path)["height"]) for r in res}
+        self.assertEqual(sizes, {"4x5": (1080, 1350), "16x9": (1920, 1080), "9x16": (1080, 1920)})
+        txt = ex.write_summary(d, jobs, res)
+        with open(txt, encoding="utf-8") as fh:
+            body = fh.read()
+        self.assertIn("16:9 1920×1080", body)
+        self.assertIn("9:16 1080×1920", body)
+
+    def test_unknown_format_falls_back_to_4x5(self):
+        src = make_source("A.mp4", fast_settings(out_format="bestaat-niet"))
+        out = self.export(src, Clip(start=1, end=2))
+        self.assertEqual((self.vstream(out)["width"], self.vstream(out)["height"]), (1080, 1350))
+
+    def test_project_roundtrip_keeps_formats(self):
+        from accu_clipper.model import Project
+        p = Project()
+        s = make_source("A.mp4", fast_settings(out_format="9x16", extra_formats=["16x9"]))
+        p.sources.append(s)
+        fn = os.path.join(self.tmp, "fmt.accuclip")
+        p.save(fn)
+        q = Project.load(fn).sources[0].settings
+        self.assertEqual((q.out_format, q.extra_formats), ("9x16", ["16x9"]))
+
+
 class TestFps(ExportBase):
     def test_fps_options(self):
         src = make_source("A.mp4")

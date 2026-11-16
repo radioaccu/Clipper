@@ -1,4 +1,4 @@
-"""Ingebouwde videospeler met live 4:5-voorbeeld (1080×1350): crop, zoom en branding.
+"""Ingebouwde videospeler met live voorbeeld van het gekozen formaat (bijv. 1080×1350): crop, zoom en branding.
 
 De positie en schaal komen uit layout.compute_layout(), dezelfde functie die de export gebruikt.
 Beeldinstellingen als helderheid/contrast/fades zijn niet in dit live voorbeeld zichtbaar; gebruik
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QGraphicsItem, QGraphicsPixmapItem, QGraphicsRect
                                QGraphicsView)
 
 from ..layout import compute_layout
-from ..model import OUT_W, OUT_H
+from ..model import OUT_W, OUT_H, format_size
 
 
 class PreviewView(QGraphicsView):
@@ -31,6 +31,7 @@ class PreviewView(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scene_ = QGraphicsScene(self)
+        self.out_w, self.out_h = OUT_W, OUT_H
         self.scene_.setSceneRect(QRectF(-30, -30, OUT_W + 60, OUT_H + 60))
         self.setScene(self.scene_)
         self.frame = QGraphicsRectItem(0, 0, OUT_W, OUT_H)
@@ -66,16 +67,31 @@ class PreviewView(QGraphicsView):
             self.player.setSource(QUrl())
 
     # ------------------------------------------------------------------ opmaak
+    def set_frame_size(self, w: int, h: int) -> None:
+        """Wisselt het kader (bijv. van 1080×1350 naar 1920×1080)."""
+        if (w, h) == (self.out_w, self.out_h):
+            return
+        self.out_w, self.out_h = w, h
+        self.frame.setRect(0, 0, w, h)
+        self.scene_.setSceneRect(QRectF(-30, -30, w + 60, h + 60))
+        self._fit()
+
+    def _fit(self) -> None:
+        self.fitInView(QRectF(-10, -10, self.out_w + 20, self.out_h + 20), Qt.AspectRatioMode.KeepAspectRatio)
+
     def update_scene(self, info, look, st, text_png: str | None) -> None:
         """Herpositioneert video, logo en DJ-naam volgens de huidige instellingen."""
         self._look, self._st = look, st
+        if st is not None:
+            self.set_frame_size(*format_size(st.out_format))
+        W, H = self.out_w, self.out_h
         if info is not None and look is not None:
-            lay = compute_layout(info.display_w, info.display_h, look)
+            lay = compute_layout(info.display_w, info.display_h, look, W, H)
             self._lay = lay
             self.video.setSize(QSizeF(lay.w, lay.h))
             self.video.setPos(lay.x, lay.y)
         if st is not None and st.logo_path and os.path.isfile(st.logo_path):
-            width = max(8, int(round(st.logo_width * OUT_W)))
+            width = max(8, int(round(st.logo_width * min(W, H))))   # fractie van de korte zijde, net als de export
             key = (st.logo_path, width, os.path.getmtime(st.logo_path))
             if not self._logo_cache or self._logo_cache[0] != key:
                 pm = QPixmap(st.logo_path)
@@ -86,7 +102,7 @@ class PreviewView(QGraphicsView):
             if not pm.isNull():
                 self.logo_item.setPixmap(pm)
                 self.logo_item.setOpacity(st.logo_opacity)
-                self.logo_item.setPos(st.logo_cx * OUT_W - pm.width() / 2, st.logo_cy * OUT_H - pm.height() / 2)
+                self.logo_item.setPos(st.logo_cx * W - pm.width() / 2, st.logo_cy * H - pm.height() / 2)
                 self.logo_item.show()
             else:
                 self.logo_item.hide()
@@ -96,18 +112,18 @@ class PreviewView(QGraphicsView):
             pm = QPixmap(text_png)
             self.text_item.setPixmap(pm)
             self.text_item.setOpacity(st.dj_opacity)
-            self.text_item.setPos(st.dj_cx * OUT_W - pm.width() / 2, st.dj_cy * OUT_H - pm.height() / 2)
+            self.text_item.setPos(st.dj_cx * W - pm.width() / 2, st.dj_cy * H - pm.height() / 2)
             self.text_item.show()
         else:
             self.text_item.hide()
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
-        self.fitInView(QRectF(-10, -10, OUT_W + 20, OUT_H + 20), Qt.AspectRatioMode.KeepAspectRatio)
+        self._fit()
 
     def showEvent(self, ev) -> None:
         super().showEvent(ev)
-        self.fitInView(QRectF(-10, -10, OUT_W + 20, OUT_H + 20), Qt.AspectRatioMode.KeepAspectRatio)
+        self._fit()
 
     # ------------------------------------------------------------------ slepen
     def mousePressEvent(self, ev) -> None:
@@ -142,8 +158,8 @@ class PreviewView(QGraphicsView):
                 fy = min(1.0, max(0.0, fy - dy / self._lay.overflow_y))
             self.cropDragged.emit(fx, fy)
         else:
-            cx = min(1.0, max(0.0, orig[0] + dx / OUT_W))
-            cy = min(1.0, max(0.0, orig[1] + dy / OUT_H))
+            cx = min(1.0, max(0.0, orig[0] + dx / self.out_w))
+            cy = min(1.0, max(0.0, orig[1] + dy / self.out_h))
             (self.logoMoved if kind == "logo" else self.textMoved).emit(cx, cy)
 
     def mouseReleaseEvent(self, ev) -> None:

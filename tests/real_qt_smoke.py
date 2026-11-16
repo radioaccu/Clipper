@@ -161,6 +161,27 @@ def main() -> int:
     if mp4:
         check("export is 1080×1350", ffprobe_size(str(mp4[0])) == (1080, 1350))
 
+    # 7b. ander formaat via de echte keuzelijst + extra formaat via het vinkje
+    w.cb_format.setCurrentIndex(w.cb_format.findData("9x16"))
+    app.processEvents()
+    fr = w.preview.frame.rect()
+    check("hoofdformaat 9:16 gekozen, voorbeeldkader 1080×1920",
+          src.settings.out_format == "9x16" and (round(fr.width()), round(fr.height())) == (1080, 1920),
+          f"{src.settings.out_format} {fr.width()}×{fr.height()}")
+    check("vinkje van het hoofdformaat staat aan en is vergrendeld",
+          w.chk_formats["9x16"].isChecked() and not w.chk_formats["9x16"].isEnabled())
+    w.chk_formats["16x9"].setChecked(True)
+    check("extra formaat 16:9 aangevinkt", src.settings.extra_formats == ["16x9"], str(src.settings.extra_formats))
+    before = set(Path(w.project.out_dir).glob("*.mp4"))
+    w.start_export([src])
+    ok = wait_until(lambda: w.export_worker is None, 300, "export in twee formaten")
+    new = sorted(set(Path(w.project.out_dir).glob("*.mp4")) - before)
+    sizes = sorted(ffprobe_size(str(p)) for p in new)
+    check("één clip → twee bestanden: 9:16 en 16:9", ok and sizes == [(1080, 1920), (1920, 1080)], str(sizes))
+    w.cb_format.setCurrentIndex(w.cb_format.findData("4x5"))
+    w.chk_formats["16x9"].setChecked(False)
+    app.processEvents()
+
     # 8. link via nagebootste yt-dlp, met tracklist
     n = len(w.project.sources)
     w.add_links(dict(urls=["https://www.youtube.com/watch?v=abc"], quality="best", cookies="", section=None,

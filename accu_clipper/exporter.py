@@ -15,7 +15,7 @@ from typing import Callable
 from .ffmpeg_tools import SourceInfo, ToolError, run_capture
 from .platform_paths import WINDOWS_RESERVED, no_window_kwargs
 from .layout import compute_layout
-from .model import Look, ExportSettings, Clip, Source, OUT_W, OUT_H
+from .model import Look, ExportSettings, Clip, Source, OUT_W, OUT_H, export_formats, format_size, format_tag
 from .timecode import format_time
 
 
@@ -37,8 +37,16 @@ def _fmt(v: float) -> str:
     return f"{v:.6f}".rstrip("0").rstrip(".") or "0"
 
 
-def video_chain(info: SourceInfo, look: Look, st: ExportSettings) -> list[str]:
+Size = tuple[int, int]
+
+
+def _size(st: ExportSettings, size: Size | None) -> Size:
+    return size or format_size(st.out_format)
+
+
+def video_chain(info: SourceInfo, look: Look, st: ExportSettings, size: Size | None = None) -> list[str]:
     """Alles vóór de overlays: fps → (HDR) → schalen → crop/pad."""
+    W, H = _size(st, size)
     f: list[str] = []
     if st.fps == "source":
         f.append(f"fps={info.fps_num}/{info.fps_den}")
@@ -53,7 +61,7 @@ def video_chain(info: SourceInfo, look: Look, st: ExportSettings) -> list[str]:
         f.append("tonemap=tonemap=hable:desat=0")
         f.append("zscale=t=bt709:m=bt709:r=tv")
         f.append("format=yuv420p")
-    lay = compute_layout(info.display_w, info.display_h, look)
+    lay = compute_layout(info.display_w, info.display_h, look, W, H)
     matrix = "bt2020nc" if keep_hdr else "bt709"
     # Expliciete doelmaat uit de gedeelde layout-berekening: correcte pixelverhouding, nooit uitgerekt.
     f.append(f"scale={lay.w}:{lay.h}:flags=lanczos+accurate_rnd+full_chroma_int:"
@@ -63,9 +71,9 @@ def video_chain(info: SourceInfo, look: Look, st: ExportSettings) -> list[str]:
         f.append(f"eq=brightness={_fmt(look.brightness)}:contrast={_fmt(look.contrast)}:"
                  f"saturation={_fmt(look.saturation)}")
     if lay.mode == "fill":
-        f.append(f"crop={OUT_W}:{OUT_H}:{-lay.x}:{-lay.y}")
+        f.append(f"crop={W}:{H}:{-lay.x}:{-lay.y}")
     else:
-        f.append(f"pad={OUT_W}:{OUT_H}:{lay.x}:{lay.y}:color=black")
+        f.append(f"pad={W}:{H}:{lay.x}:{lay.y}:color=black")
     return f
 
 
@@ -80,30 +88,35 @@ def _hex(c: str) -> str:
     return "0x" + (c if len(c) == 6 else "5AAAFF")
 
 
-def audio_only_base(info: SourceInfo, look: Look, st: ExportSettings, duration: float, audio_label: str) -> str:
-    """Zwart 1080×1350-kader, optioneel met golfvorm uit de audio (alleen voor bronnen zonder beeld)."""
+def audio_only_base(info: SourceInfo, look: Look, st: ExportSettings, duration: float, audio_label: str,
+                    size: Size | None = None) -> str:
+    """Zwart kader, optioneel met golfvorm uit de audio (alleen voor bronnen zonder beeld)."""
+    W, H = _size(st, size)
     fps = out_fps(info, st)
-    bg = f"color=c=black:s={OUT_W}x{OUT_H}:r={fps}:d={duration + 1:.3f},format=yuv420p"
+    bg = f"color=c=black:s={W}x{H}:r={fps}:d={duration + 1:.3f},format=yuv420p"
     if st.audio_visual != "waveform":
         return f"{bg}[base]"
-    h = 420
+    h = int(min(W, H) * 0.39) // 2 * 2          # 420 px bij een korte zijde van 1080
     return (f"{bg}[bg];[{audio_label}]aformat=channel_layouts=mono,"
-            f"showwaves=s={OUT_W}x{h}:mode=cline:rate={fps}:colors={_hex(st.wave_color)}:scale=sqrt,"
-            f"format=yuva420p[wf];[bg][wf]overlay=x=0:y={(OUT_H - h) // 2}:shortest=1,format=yuv420p[base]")
+            f"showwaves=s={W}x{h}:mode=cline:rate={fps}:colors={_hex(st.wave_color)}:scale=sqrt,"
+            f"format=yuva420p[wf];[bg][wf]overlay=x=0:y={(H - h) // 2}:shortest=1,format=yuv420p[base]")
 
 
 def build_video_graph(info: SourceInfo, look: Look, st: ExportSettings, overlays: list[Overlay],
-                      duration: float, pix_fmt: str, still: bool = False, audio_label: str = "0:a:0") -> str:
+                      duration: float, pix_fmt: str, still: bool = False, audio_label: str = "0:a:0",
+                      size: Size | None = None) -> str:
     """Bouwt de complete -filter_complex voor beeld (label [v] als uitvoer)."""
+    W, H = _size(st, size)
     if info.audio_only:
-        parts = [audio_only_base(info, look, st, duration, audio_label)]
+        parts = [audio_only_base(info, look, st, duration, audio_label, (W, H))]
     else:
-        parts = [f"[0:v:0]{','.join(video_chain(info, look, st))}[base]"]
+        parts = [f"[0:v:0]{','.join(video_chain(info, look, st, (W, H)))}[base]"]
     last = "base"
     for i, ov in enumerate(overlays, start=1):
         chain = []
         if ov.width_frac:
-            chain.append(f"scale={int(round(ov.width_frac * OUT_W / 2) * 2)}:-2:flags=lanczos")
+            # breedte als fractie van de korte zijde: het logo is in elk formaat even groot
+            chain.append(f"scale={int(round(ov.width_frac * min(W, H) / 2) * 2)}:-2:flags=lanczos")
         chain.append("format=rgba")
         if ov.opacity < 0.999:
             chain.append(f"colorchannelmixer=aa={_fmt(ov.opacity)}")
@@ -192,7 +205,7 @@ def audio_encode_args(info: SourceInfo, st: ExportSettings) -> list[str]:
 
 def build_command(ffmpeg: str, info: SourceInfo, start: float, duration: float, look: Look,
                   st: ExportSettings, overlays: list[Overlay], out_path: str,
-                  measured: dict | None = None) -> list[str]:
+                  measured: dict | None = None, size: Size | None = None) -> list[str]:
     """Volledige ffmpeg-opdracht als lijst (geen shell!)."""
     venc, pix = encoder_args(info, st)
     cmd = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-progress", "pipe:1", "-nostats",
@@ -206,7 +219,7 @@ def build_command(ffmpeg: str, info: SourceInfo, start: float, duration: float, 
         prefix = "[0:a:0]asplit=2[aw][am];"   # één kopie voor de golfvorm, één voor het geluid
         a_in = "am"
     graph = prefix + build_video_graph(info, look, st, overlays, duration, pix,
-                                       audio_label="aw" if info.audio_only else "0:a:0")
+                                       audio_label="aw" if info.audio_only else "0:a:0", size=size)
     if audio:
         achain = build_audio_chain(info, look, st, duration, measured)
         graph += f";[{a_in}]" + (",".join(achain) if achain else "anull") + "[a]"
@@ -222,14 +235,14 @@ def build_command(ffmpeg: str, info: SourceInfo, start: float, duration: float, 
 
 
 def build_still_command(ffmpeg: str, info: SourceInfo, t: float, look: Look, st: ExportSettings,
-                        overlays: list[Overlay], out_png: str) -> list[str]:
+                        overlays: list[Overlay], out_png: str, size: Size | None = None) -> list[str]:
     cmd = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-ss", f"{t:.6f}", "-i", info.path]
     for ov in overlays:
         cmd += ["-loop", "1", "-framerate", "30", "-i", ov.path]
     if info.audio_only:
         # alleen 2 s audio inlezen: genoeg voor één golfvorm-frame
         cmd = cmd[:-2] + ["-t", "2", "-i", info.path]
-    graph = build_video_graph(info, look, st, overlays, 1.0, "rgb24", still=True)
+    graph = build_video_graph(info, look, st, overlays, 1.0, "rgb24", still=True, size=size)
     cmd += ["-filter_complex", graph, "-map", "[v]", "-frames:v", "1", out_png]
     return cmd
 
@@ -262,8 +275,10 @@ def reserve_unique(directory: str, base: str, ext: str = ".mp4") -> str:
             n += 1
 
 
-def estimate_bytes(duration: float, st: ExportSettings) -> int:
-    """Ruwe, ruime schatting voor de schijfruimtecontrole."""
+def estimate_bytes(duration: float, st: ExportSettings, size: Size | None = None) -> int:
+    """Ruwe, ruime schatting voor de schijfruimtecontrole (bitrate geschaald naar het aantal pixels)."""
+    W, H = _size(st, size)
+    px = (W * H) / (OUT_W * OUT_H)
     if st.lossless:
         mbit = 250.0
     elif st.encoder == "h264_videotoolbox":
@@ -274,7 +289,7 @@ def estimate_bytes(duration: float, st: ExportSettings) -> int:
         mbit = 25.0
     else:
         mbit = 12.0
-    return int(duration * (mbit + st.audio_bitrate_k / 1000.0) * 1e6 / 8 * 1.15)
+    return int(duration * (mbit * px + st.audio_bitrate_k / 1000.0) * 1e6 / 8 * 1.15)
 
 
 def check_disk_space(directory: str, needed: int) -> None:
@@ -421,6 +436,24 @@ class ClipResult:
     cancelled: bool = False
     start: float = 0.0
     duration: float = 0.0
+    fmt: str = ""
+
+
+Job = tuple  # (Source, Clip, index) of (Source, Clip, index, formaat)
+
+
+def job_format(job: Job) -> str:
+    return job[3] if len(job) > 3 and job[3] else job[0].settings.out_format
+
+
+def expand_jobs(jobs: list[Job]) -> list[Job]:
+    """Eén taak per clip per gekozen formaat (hoofdformaat + extra formaten van die set)."""
+    out = []
+    for job in jobs:
+        src, clip, idx = job[:3]
+        for f in ([job[3]] if len(job) > 3 and job[3] else export_formats(src.settings)):
+            out.append((src, clip, idx, f))
+    return out
 
 
 TextRenderer = Callable[[ExportSettings, str], "str | None"]
@@ -444,9 +477,12 @@ def make_overlays(st: ExportSettings, tmpdir: str, text_renderer: TextRenderer |
 def export_clip(ffmpeg: str, source: Source, clip: Clip, out_dir: str, index: int,
                 progress: Callable[[float], None] | None = None,
                 cancel: threading.Event | None = None,
-                text_renderer: TextRenderer | None = None) -> str:
-    """Exporteert één clip. Schrijft eerst naar een .part-bestand en hernoemt pas bij succes."""
+                text_renderer: TextRenderer | None = None, fmt: str | None = None) -> str:
+    """Exporteert één clip in één formaat (standaard het hoofdformaat van de set).
+    Schrijft eerst naar een .part-bestand en hernoemt pas bij succes."""
     info, st = source.info, source.settings
+    fmt = format_tag(fmt or st.out_format)
+    size = format_size(fmt)
     assert info is not None
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
@@ -456,11 +492,11 @@ def export_clip(ffmpeg: str, source: Source, clip: Clip, out_dir: str, index: in
     dur = min(clip.end, info.duration) - start
     if dur <= 0.05:
         raise ToolError("De clip heeft geen geldige lengte (start/einde controleren).")
-    check_disk_space(out_dir, estimate_bytes(dur, st))
+    check_disk_space(out_dir, estimate_bytes(dur, st, size))
     if not os.access(out_dir, os.W_OK):
         raise ToolError(f"Geen schrijfrechten in de exportmap:\n{out_dir}")
 
-    base = f"{safe_stem(source.name)}_clip{index:02d}_{format_time(start, force_hours=True).replace(':', '-')}_{dur:.0f}s"
+    base = f"{safe_stem(source.name)}_clip{index:02d}_{format_time(start, force_hours=True).replace(':', '-')}_{dur:.0f}s_{fmt}"
     final = reserve_unique(out_dir, base)
     part = final + ".part"
     tmpdir = tempfile.mkdtemp(prefix="accu_")
@@ -469,7 +505,7 @@ def export_clip(ffmpeg: str, source: Source, clip: Clip, out_dir: str, index: in
             raise Cancelled()
         overlays = make_overlays(st, tmpdir, text_renderer)
         measured = measure_audio(ffmpeg, info, start, dur, st, cancel)
-        cmd = build_command(ffmpeg, info, start, dur, clip.look, st, overlays, part, measured)
+        cmd = build_command(ffmpeg, info, start, dur, clip.look, st, overlays, part, measured, size)
         run_ffmpeg(cmd, dur, progress, cancel)
         if not os.path.isfile(part) or os.path.getsize(part) < 1024:
             raise ToolError("De export leverde geen bruikbaar bestand op.")
@@ -489,7 +525,7 @@ def export_clip(ffmpeg: str, source: Source, clip: Clip, out_dir: str, index: in
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def run_queue(ffmpeg: str, jobs: list[tuple[Source, Clip, int]], out_dir: str,
+def run_queue(ffmpeg: str, jobs: list[Job], out_dir: str,
               on_start: Callable[[int, int, Source, Clip], None] | None = None,
               on_progress: Callable[[int, int, float], None] | None = None,
               cancel: threading.Event | None = None,
@@ -497,32 +533,34 @@ def run_queue(ffmpeg: str, jobs: list[tuple[Source, Clip, int]], out_dir: str,
     """Verwerkt de wachtrij. Een fout in één clip stopt de rest niet."""
     results: list[ClipResult] = []
     total = len(jobs)
-    for n, (src, clip, idx) in enumerate(jobs):
+    for n, job in enumerate(jobs):
+        src, clip, idx = job[:3]
+        fmt = job_format(job)
         if cancel and cancel.is_set():
             results.append(ClipResult(src.name, clip.id, False, cancelled=True,
-                                      start=clip.start, duration=clip.duration))
+                                      start=clip.start, duration=clip.duration, fmt=fmt))
             continue
         if on_start:
             on_start(n, total, src, clip)
         try:
             path = export_clip(ffmpeg, src, clip, out_dir, idx,
                                progress=(lambda f, n=n: on_progress(n, total, f)) if on_progress else None,
-                               cancel=cancel, text_renderer=text_renderer)
+                               cancel=cancel, text_renderer=text_renderer, fmt=fmt)
             results.append(ClipResult(src.name, clip.id, True, path=path, start=clip.start,
-                                      duration=clip.duration))
+                                      duration=clip.duration, fmt=fmt))
         except Cancelled:
             results.append(ClipResult(src.name, clip.id, False, cancelled=True, start=clip.start,
-                                      duration=clip.duration))
+                                      duration=clip.duration, fmt=fmt))
         except ToolError as e:
             results.append(ClipResult(src.name, clip.id, False, error=str(e), start=clip.start,
-                                      duration=clip.duration))
+                                      duration=clip.duration, fmt=fmt))
         except Exception as e:  # onverwacht: toch doorgaan met de rest
             results.append(ClipResult(src.name, clip.id, False, error=f"Onverwachte fout: {e}",
-                                      start=clip.start, duration=clip.duration))
+                                      start=clip.start, duration=clip.duration, fmt=fmt))
     return results
 
 
-def write_summary(out_dir: str, jobs: list[tuple[Source, Clip, int]], results: list[ClipResult]) -> str:
+def write_summary(out_dir: str, jobs: list[Job], results: list[ClipResult]) -> str:
     """Schrijft een tekstoverzicht (+ JSON met volledige instellingen). Geeft het txt-pad terug."""
     from . import __version__
     from datetime import datetime
@@ -531,7 +569,10 @@ def write_summary(out_dir: str, jobs: list[tuple[Source, Clip, int]], results: l
     lines = [f"Radio ACCU Clipper {__version__} – exportoverzicht", datetime.now().strftime("%d-%m-%Y %H:%M"),
              f"Exportmap: {out_dir}", ""]
     data = []
-    for (src, clip, idx), res in zip(jobs, results):
+    for job, res in zip(jobs, results):
+        src, clip, idx = job[:3]
+        fmt = job_format(job)
+        W, H = format_size(fmt)
         st = src.settings
         status = "OK" if res.ok else ("GEANNULEERD" if res.cancelled else f"MISLUKT: {res.error.splitlines()[0] if res.error else ''}")
         lines.append(f"[{status}] {src.name}  clip {idx:02d}: start {format_time(clip.start, 1, True)}  "
@@ -542,9 +583,10 @@ def write_summary(out_dir: str, jobs: list[tuple[Source, Clip, int]], results: l
             lines.append(f"      → {os.path.basename(res.path)}")
         enc = "lossless" if st.lossless else (f"VideoToolbox q{st.vt_quality}" if st.encoder == "h264_videotoolbox"
                                               else f"x264 CRF {st.crf} {st.preset}")
-        lines.append(f"      {OUT_W}×{OUT_H}, {enc}, fps {st.fps}, audio AAC {st.audio_bitrate_k}k, "
+        lines.append(f"      {fmt.replace('x', ':')} {W}×{H}, {enc}, fps {st.fps}, audio AAC {st.audio_bitrate_k}k, "
                      f"{clip.look.crop_mode}, normalisatie {st.normalize}, HDR: {st.hdr_mode if src.info and src.info.hdr else '-'}")
-        data.append(dict(source=src.path, clip=clip.to_dict(), settings=asdict(st), result=asdict(res)))
+        data.append(dict(source=src.path, format=fmt, size=[W, H], clip=clip.to_dict(), settings=asdict(st),
+                         result=asdict(res)))
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     with open(path[:-4] + ".json", "w", encoding="utf-8") as f:

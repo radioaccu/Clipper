@@ -1,7 +1,26 @@
-# Radio ACCU Clipper 2.2
+# Radio ACCU Clipper 2.3
 
-Desktopapp voor **macOS en Windows** (PySide6 + FFmpeg) om uit lange DJ-sets clips voor Instagram (1080 × 1350) te maken.
+Desktopapp voor **macOS en Windows** (PySide6 + FFmpeg) om uit lange DJ-sets clips te maken voor Instagram, Reels, TikTok, YouTube en meer (4:5, 9:16, 3:4, 1:1 en 16:9).
 Alles draait op je eigen computer: geen cloud, abonnement of watermerk. Bronvideo's worden alleen gelezen.
+
+## Beeldformaten (nieuw in 2.3)
+
+Tab **Beeld → Formaat** (per set):
+
+| Formaat | Afmeting | Voor |
+|---|---|---|
+| 4:5 staand (standaard) | 1080 × 1350 | Instagram-post in de feed |
+| 9:16 verticaal | 1080 × 1920 | Reels, TikTok, Stories, YouTube Shorts |
+| 3:4 staand | 1080 × 1440 | Instagram-post zoals het profielraster hem toont |
+| 1:1 vierkant | 1080 × 1080 | Vierkante post |
+| 16:9 liggend | 1920 × 1080 | YouTube, websites, schermen |
+
+- Het **hoofdformaat** zie je in het voorbeeld. Vink bij **Ook exporteren als** extra formaten aan: dan wordt elke
+  goedgekeurde clip in één keer in al die formaten gemaakt (bestandsnaam eindigt op `_4x5`, `_9x16`, `_16x9` …).
+- Beeldvullend croppen of het volledige beeld met zwarte randen werkt in elk formaat. Een liggende video in 16:9 houdt
+  zijn volledige beeld; staande formaten croppen de zijkanten (verschuifbaar door te slepen).
+- Crop-positie, zoom, logo en DJ-naam gelden voor alle formaten. Logo- en tekstgrootte zijn in elk formaat even groot
+  (gemeten aan de korte zijde, altijd 1080 px). Controleer de andere formaten even door het hoofdformaat te wisselen.
 
 ## Delen met vrienden: echte installers voor Windows en Mac (nieuw in 2.2)
 
@@ -91,7 +110,7 @@ Wil je FFmpeg in de app inbouwen? Zet vóór het bouwen `ffmpeg` en `ffprobe` (a
   vele andere sites die [yt-dlp](https://github.com/yt-dlp/yt-dlp) ondersteunt. De download komt in `~/Movies/Radio ACCU Downloads`
   (aanpasbaar) en verschijnt daarna als gewone set.
 - **Kwaliteit**: beste (tot 4K, .mkv), tot 1440p, tot 1080p, *compatibel* (H.264/AAC .mp4) of *alleen audio*.
-  Voor een 1080 × 1350-crop uit een liggende video geeft 1440p of hoger scherpere clips dan 1080p.
+  Voor een staande crop (4:5, 9:16) uit een liggende video geeft 1440p of hoger scherpere clips dan 1080p.
 - **Alleen een fragment**: bijv. 1:00:00–1:30:00 van een lange set; scheelt veel downloadtijd en schijfruimte.
 - **Afspeellijsten**: de app vraagt of je alle items wilt downloaden.
 - **Tracklist en hoofdstukken**: vink aan om de tijden uit de YouTube-beschrijving (of de hoofdstukken) direct als clips te
@@ -104,9 +123,9 @@ Wil je FFmpeg in de app inbouwen? Zet vóór het bouwen `ffmpeg` en `ffprobe` (a
 
 ## Andere nieuwe opties in 2.1
 
-- **Audiobestanden en audio-only links** (mp3, wav, m4a, SoundCloud, Mixcloud): de clip krijgt een zwart 1080 × 1350-beeld,
+- **Audiobestanden en audio-only links** (mp3, wav, m4a, SoundCloud, Mixcloud): de clip krijgt een zwart beeld in het gekozen formaat,
   standaard met een golfvorm van de muziek (kleur instelbaar, tab Beeld). Logo en DJ-naam komen er gewoon overheen.
-- **Omslagfoto** (JPG, 1080 × 1350) uit het midden van elke clip, voor Instagram (tab Export).
+- **Omslagfoto** (JPG, in het formaat van de clip) uit het midden van elke clip, voor Instagram (tab Export).
 - **Instagram-bijschrift** als tekstbestand naast elke clip, met een eigen sjabloon en invulvelden zoals {title}, {dj}, {label}
   (tracknaam) en {start} (tab Export).
 - Hoofdstukken in videobestanden worden ook bij lokale bestanden gelezen.
@@ -115,7 +134,7 @@ Wil je FFmpeg in de app inbouwen? Zet vóór het bouwen `ffmpeg` en `ffprobe` (a
 
 Volledig (en voor zover genoemd getest, zie onder): eigen venster met Dock-icoon · native bestandskiezers + drag-and-drop ·
 meerdere sets in een wachtrij · achtergrondverwerking met voortgang en annuleren · tijdelijke bestanden worden opgeruimd ·
-alle uitvoer exact 1080×1350 · fill/fit, zoom, crop slepen · rotatie en pixelverhouding · H.264 MP4, CRF/preset/profielen,
+uitvoer in exact 1080 × 1350 (standaard), 1080 × 1920, 1080 × 1440, 1080 × 1080 of 1920 × 1080 · fill/fit, zoom, crop slepen · rotatie en pixelverhouding · H.264 MP4, CRF/preset/profielen,
 VideoToolbox-optie, lossless · FPS bron/24/25/30/50/60 · HDR-detectie met tone-mapping naar SDR (of HEVC 10-bit behouden) ·
 helderheid/contrast/verzadiging · video- en audiofades · AAC-bitrate, gain, mute, normalisatie (loudness of piek) met limiter ·
 logo (PNG met transparantie) en DJ-naam, sleepbaar, zelfde render in preview en export · heuristische highlights
@@ -155,6 +174,10 @@ audio-only bronnen met golfvorm · omslagfoto · bijschrift.
   videodownload met voortgang in twee delen, audio-only, fragment, opnieuw gebruiken van een bestaande download,
   annuleren (geen restbestanden), fout halverwege, botcontrole → cookie-advies, schijfruimte, URL na `--` (veilig).
 - Tracklists in diverse notaties; audio-only export (1080×1350, golfvorm op de juiste plek, sync); omslagfoto; bijschrift.
+- Beeldformaten (2.3): elk formaat exact op maat in fill en fit; 16:9 houdt een liggend beeld volledig; 9:16 fit met
+  balken van de juiste hoogte; crop-positie in 9:16; staande bron in 16:9 met zijbalken; logo even groot in elk formaat;
+  audio-only in 16:9; één clip in drie formaten via de wachtrij (met overzicht); onbekend formaat valt terug op 4:5;
+  formaten blijven bewaard in een project.
 - Rooktest van de interfacelogica (toevoegen, analyseren, clips bewerken, exporteren, project opslaan/laden, links →
   download → clips uit tracklist → export) met een **nep-Qt** die nu ook controleert dat elk veld alleen zijn eigen signalen heeft.
 

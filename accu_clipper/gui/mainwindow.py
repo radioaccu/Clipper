@@ -22,7 +22,8 @@ from .. import features as fe
 from .. import downloader as dl
 from .. import highlights as hl
 from ..ffmpeg_tools import ToolError, encoder_available, filter_available, find_tool, probe
-from ..model import (Clip, ExportSettings, FPS_OPTIONS, Look, OUT_H, OUT_W, PRESETS, Project, QUALITY_PROFILES,
+from ..model import (FORMATS, Clip, ExportSettings, FPS_OPTIONS, Look, PRESETS, Project, QUALITY_PROFILES,
+                     format_size,
                      Source, apply_profile)
 from ..platform_paths import app_data_dir, file_manager_name, reinstall_hint, videos_dir
 from ..timecode import format_time, parse_time
@@ -313,7 +314,30 @@ class MainWindow(QMainWindow):
     # --- tab: beeld (per clip)
     def _tab_image(self) -> QWidget:
         w = QWidget(); lay = QVBoxLayout(w)
-        gb = QGroupBox("Beeldformaat – altijd exact 1080 × 1350 (4:5)")
+        gfm = QGroupBox("Formaat (voor de hele set)")
+        ffm = QFormLayout(gfm)
+        self.cb_format = QComboBox()
+        for k, (_w, _h, label, _help) in FORMATS.items():
+            self.cb_format.addItem(label, k)
+        self.bind(self.cb_format, self._set, "out_format", "combo", self._format_changed)
+        self.format_help = hint("")
+        row = QHBoxLayout(); row.setSpacing(10)
+        self.chk_formats: dict[str, QCheckBox] = {}
+        for k in FORMATS:
+            cb = QCheckBox(k.replace("x", ":"))
+            cb.setToolTip(FORMATS[k][2] + " – " + FORMATS[k][3])
+            cb.toggled.connect(lambda on, k=k: self._extra_format_toggled(k, on))
+            self.chk_formats[k] = cb
+            row.addWidget(cb)
+        row.addStretch(1)
+        ffm.addRow("Hoofdformaat", self.cb_format)
+        ffm.addRow(self.format_help)
+        ffm.addRow("Ook exporteren als", row)
+        ffm.addRow(hint("Elke goedgekeurde clip wordt in het hoofdformaat én in de aangevinkte formaten geëxporteerd "
+                        "(bestandsnaam eindigt op bijv. _9x16). Het voorbeeld toont het hoofdformaat. Crop-positie, zoom, "
+                        "logo en DJ-naam gelden voor alle formaten: wissel even het hoofdformaat om de andere te controleren."))
+        lay.addWidget(gfm)
+        gb = QGroupBox("Beeld in het kader (per clip)")
         f = QFormLayout(gb)
         self.cb_crop = QComboBox()
         self.cb_crop.addItem("Beeldvullend croppen", "fill")
@@ -329,7 +353,8 @@ class MainWindow(QMainWindow):
         f.addRow("Horizontaal (0 = links)", self.sp_fx); f.addRow("Verticaal (0 = boven)", self.sp_fy)
         f.addRow(self.btn_center)
         f.addRow(hint("Het beeld wordt nooit uitgerekt. Sleep het beeld in het voorbeeld om de crop te verplaatsen. "
-                      "Rotatiemetadata en pixelverhouding van de bron worden automatisch verwerkt."))
+                      "Rotatiemetadata en pixelverhouding van de bron worden automatisch verwerkt. Een liggende video "
+                      "in 16:9 houdt zijn volledige beeld; staande formaten croppen de zijkanten."))
         lay.addWidget(gb)
         ga = QGroupBox("Bronnen zonder beeld (mp3, SoundCloud, …)")
         fa = QFormLayout(ga)
@@ -416,8 +441,9 @@ class MainWindow(QMainWindow):
         self.hdr_lbl = hint("")
         fh.addRow(self.cb_hdr); fh.addRow(self.hdr_lbl)
         lay.addWidget(gh)
-        lay.addWidget(hint("Uitvoer is altijd 1080 × 1350 px. 'Mathematisch lossless' is lossless ten opzichte van de "
-                           "1080×1350-frames die FFmpeg maakt, niet ten opzichte van je bronbestand (er wordt geschaald en "
+        lay.addWidget(hint("De afmeting volgt het formaat (tab Beeld); de korte zijde is altijd 1080 px. "
+                           "'Mathematisch lossless' is lossless ten opzichte van de "
+                           "frames die FFmpeg maakt, niet ten opzichte van je bronbestand (er wordt geschaald en "
                            "omgezet naar 4:2:0)."))
         lay.addStretch(1)
         return scroll_tab(w)
@@ -472,7 +498,7 @@ class MainWindow(QMainWindow):
         self.bind(self.sp_lo, self._set, "logo_opacity", "spin", self._after_set, scale=100)
         self.bind(self.sp_lx, self._set, "logo_cx", "spin", self._after_set, scale=100)
         self.bind(self.sp_ly, self._set, "logo_cy", "spin", self._after_set, scale=100)
-        f.addRow(self.ed_logo); f.addRow(r); f.addRow("Grootte (% van breedte)", self.sp_lw)
+        f.addRow(self.ed_logo); f.addRow(r); f.addRow("Grootte (% van korte zijde)", self.sp_lw)
         f.addRow("Zichtbaarheid", self.sp_lo); f.addRow("Midden X", self.sp_lx); f.addRow("Midden Y", self.sp_ly)
         f.addRow(hint("Je kunt het logo ook in het voorbeeld verslepen."))
         lay.addWidget(gl)
@@ -491,7 +517,7 @@ class MainWindow(QMainWindow):
         fd.addRow("Naam", self.ed_dj); fd.addRow("Tekengrootte", self.sp_dsz); fd.addRow(self.chk_dout)
         fd.addRow(self.chk_dbold); fd.addRow(self.btn_dcol); fd.addRow("Zichtbaarheid", self.sp_dop)
         fd.addRow("Midden X", self.sp_dx); fd.addRow("Midden Y", self.sp_dy)
-        fd.addRow(hint("Grootte is in exportpixels (kader = 1080 × 1350). De tekst wordt als afbeelding gerenderd en is in "
+        fd.addRow(hint("Grootte is in exportpixels (de korte zijde van het kader is 1080 px). De tekst wordt als afbeelding gerenderd en is in "
                        "preview en export identiek."))
         lay.addWidget(gd)
         lay.addStretch(1)
@@ -509,7 +535,7 @@ class MainWindow(QMainWindow):
         f.addWidget(hint("Bestaande bestanden worden nooit overschreven: bij een gelijke naam komt er een volgnummer achter."))
         lay.addWidget(gb)
         gx = QGroupBox("Extra's bij elke clip (per set)"); fx = QVBoxLayout(gx)
-        self.chk_cover = QCheckBox("Omslagfoto (JPG, 1080 × 1350) uit het midden van de clip")
+        self.chk_cover = QCheckBox("Omslagfoto (JPG, in het formaat van de clip) uit het midden van de clip")
         self.chk_caption = QCheckBox("Instagram-bijschrift als tekstbestand")
         self.bind(self.chk_cover, self._set, "export_cover", "check")
         self.bind(self.chk_caption, self._set, "caption_enabled", "check", self._update_enablement)
@@ -1429,6 +1455,37 @@ class MainWindow(QMainWindow):
             lk.brightness, lk.contrast, lk.saturation = 0.0, 1.0, 1.0
             self.refresh_binds()
 
+    def _format_changed(self) -> None:
+        st = self._set()
+        if st is not None:
+            st.extra_formats = [f for f in st.extra_formats if f != st.out_format]
+        self._sync_formats()
+        self._refresh_preview()
+
+    def _extra_format_toggled(self, key: str, on: bool) -> None:
+        st = self._set()
+        if st is None or self._loading or key == st.out_format:
+            return
+        chosen = set(st.extra_formats)
+        (chosen.add if on else chosen.discard)(key)
+        st.extra_formats = [k for k in FORMATS if k in chosen]     # vaste volgorde
+        self._sync_formats()
+
+    def _sync_formats(self) -> None:
+        """Vinkjes en uitleg gelijk zetten met de instellingen van de huidige set."""
+        st = self._set()
+        for k, cb in self.chk_formats.items():
+            cb.blockSignals(True)
+            cb.setChecked(st is not None and (k == st.out_format or k in st.extra_formats))
+            cb.setEnabled(st is not None and k != st.out_format)     # het hoofdformaat gaat altijd mee
+            cb.blockSignals(False)
+        if st is None:
+            self.format_help.setText("")
+            return
+        w, h, _label, help_text = FORMATS.get(st.out_format, FORMATS["4x5"])
+        n = len(ex.expand_jobs([(self.cur_src, None, 0)])) if self.cur_src else 1
+        self.format_help.setText(f"{help_text} Per clip worden {n} bestand(en) gemaakt." if n > 1 else help_text)
+
     def _refresh_all(self) -> None:
         self.refresh_binds()
         st = self._set()
@@ -1448,6 +1505,7 @@ class MainWindow(QMainWindow):
             self.sp_dur.setValue(d)
         self._loading = False
         self._update_profile_help()
+        self._sync_formats()
         self._update_info()
         self._update_enablement()
 
@@ -1498,7 +1556,7 @@ class MainWindow(QMainWindow):
         for w in (self.chk_cover, self.chk_caption):
             w.setEnabled(has_src)
         self.ed_caption.setEnabled(has_src and st.caption_enabled)
-        for w in (self.cb_mode, self.cb_dur, self.sp_count, self.btn_analyze, self.btn_add_clip, self.cb_profile,
+        for w in (self.cb_format, self.cb_mode, self.cb_dur, self.sp_count, self.btn_analyze, self.btn_add_clip, self.cb_profile,
                   self.cb_enc, self.cb_fps, self.cb_abr, self.cb_aenc, self.cb_norm, self.btn_logo, self.btn_logo_rm,
                   self.sp_lw, self.sp_lo, self.sp_lx, self.sp_ly, self.ed_dj, self.sp_dsz, self.chk_dout,
                   self.chk_dbold, self.btn_dcol, self.sp_dop, self.sp_dx, self.sp_dy, self.btn_apply_set):
@@ -1589,6 +1647,7 @@ class MainWindow(QMainWindow):
         st, info, look = src.settings, src.info, copy.deepcopy(clip.look)
         t = min(max(self.preview.player.position() / 1000.0, 0.0), max(0.0, info.duration - 0.1))
         png_text = self._text_png(st)
+        size = format_size(st.out_format)
         out = os.path.join(self._tmp, "exact.png")
         if os.path.exists(out):
             os.remove(out)
@@ -1596,7 +1655,7 @@ class MainWindow(QMainWindow):
         def job(w: Worker):
             td = tempfile.mkdtemp(dir=self._tmp)
             ovs = ex.make_overlays(st, td, lambda s, d: png_text)
-            cmd = ex.build_still_command(self.ffmpeg, info, t, look, st, ovs, out)
+            cmd = ex.build_still_command(self.ffmpeg, info, t, look, st, ovs, out, size)
             from ..ffmpeg_tools import run_capture
             cp = run_capture(cmd, timeout=180)
             if cp.returncode != 0 or not os.path.isfile(out):
@@ -1605,12 +1664,15 @@ class MainWindow(QMainWindow):
 
         def done(path):
             dlg = QDialog(self)
-            dlg.setWindowTitle(f"Exact exportframe op {format_time(t, 2)} ({OUT_W}×{OUT_H})")
+            dlg.setWindowTitle(f"Exact exportframe op {format_time(t, 2)} ({size[0]}×{size[1]})")
             lay = QVBoxLayout(dlg)
             lb = QLabel()
             pm = QPixmap(path)
-            h = max(400, min(900, int((self.screen().availableGeometry().height() if self.screen() else 900) * 0.85)))
-            lb.setPixmap(pm.scaledToHeight(h, Qt.TransformationMode.SmoothTransformation))
+            geo = self.screen().availableGeometry() if self.screen() else None
+            max_h = max(400, min(900, int((geo.height() if geo else 900) * 0.85)))
+            max_w = max(400, int((geo.width() if geo else 1400) * 0.85))
+            lb.setPixmap(pm.scaled(max_w, max_h, Qt.AspectRatioMode.KeepAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation))
             lay.addWidget(lb)
             lay.addWidget(hint("Dit frame is door FFmpeg gemaakt met dezelfde filterketen als de export (excl. fades)."))
             dlg.exec()
@@ -1663,6 +1725,8 @@ class MainWindow(QMainWindow):
         except OSError as e:
             QMessageBox.warning(self, "Exportmap", f"De exportmap kan niet worden gemaakt:\n{e}")
             return
+        n_clips = len(jobs)
+        jobs = ex.expand_jobs(jobs)          # één taak per clip per gekozen formaat
         for s in {id(j[0]): j[0] for j in jobs}.values():
             self._text_png(s.settings)       # tekstafbeeldingen op de hoofdthread voorbereiden
         texts = dict(self._text_cache)
@@ -1670,7 +1734,8 @@ class MainWindow(QMainWindow):
 
         def job(w: Worker):
             def on_start(n, total, s, c):
-                label["t"] = f"Exporteren {n + 1}/{total}: {s.name} · {format_time(c.start, 0)}"
+                fmt = ex.job_format(jobs[n]).replace("x", ":")
+                label["t"] = f"Exporteren {n + 1}/{total}: {s.name} · {format_time(c.start, 0)} · {fmt}"
                 w.report(n / total, label["t"])
             res = ex.run_queue(self.ffmpeg, jobs, out_dir, on_start=on_start,
                                on_progress=lambda n, total, f: w.report((n + f) / total, label["t"]),
@@ -1682,7 +1747,7 @@ class MainWindow(QMainWindow):
             return res, summary
         worker = Worker(job)
         self.export_worker = worker
-        self.log.appendPlainText(f"— Export gestart: {len(jobs)} clip(s) naar {out_dir}")
+        self.log.appendPlainText(f"— Export gestart: {n_clips} clip(s), {len(jobs)} bestand(en) naar {out_dir}")
         self._workers.add(worker)
         worker.finished.connect(lambda w=worker: self._workers.discard(w))
         worker.progress.connect(lambda f, t, wk=worker: self._on_progress(wk, f, t))
@@ -1711,9 +1776,9 @@ class MainWindow(QMainWindow):
             if r.ok:
                 self.log.appendPlainText(f"✓ {os.path.basename(r.path)}")
             elif r.cancelled:
-                self.log.appendPlainText(f"– geannuleerd: {r.source} @ {format_time(r.start, 0)}")
+                self.log.appendPlainText(f"– geannuleerd: {r.source} @ {format_time(r.start, 0)} ({r.fmt})")
             else:
-                self.log.appendPlainText(f"✗ {r.source} @ {format_time(r.start, 0)}: {r.error}")
+                self.log.appendPlainText(f"✗ {r.source} @ {format_time(r.start, 0)} ({r.fmt}): {r.error}")
         if summary:
             self.log.appendPlainText(f"Overzicht: {summary}")
         self._export_end(f"Export klaar: {len(ok)} gelukt, {len(bad)} mislukt, {len(canc)} geannuleerd.")
@@ -1722,7 +1787,8 @@ class MainWindow(QMainWindow):
         text = f"{len(ok)} clip(s) geëxporteerd naar:\n{self.project.out_dir}"
         if bad:
             text += f"\n\n{len(bad)} mislukt (de rest is wel gemaakt):\n" + "\n".join(
-                f"• {r.source} @ {format_time(r.start, 0)}: {r.error.splitlines()[0] if r.error else '?'}" for r in bad[:5])
+                f"• {r.source} @ {format_time(r.start, 0)} ({r.fmt}): {r.error.splitlines()[0] if r.error else '?'}"
+                for r in bad[:5])
         if canc:
             text += f"\n{len(canc)} geannuleerd."
         box.setText(text)
