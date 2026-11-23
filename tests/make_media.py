@@ -45,6 +45,9 @@ def main(d: Path) -> None:
     shutil.copy2("A.mp4", "Mijn Set – Café #1 (zondag) [live].mp4")
     env = dict(os.environ, ACCU_FFMPEG=FF)
     subprocess.run([sys.executable, str(HERE / "make_synth_set.py"), str(d / "S_synthset.mp4")], check=True, env=env)
+    # nagebootste opname waarin het beeld 0,36 s achterloopt op het geluid (sync-tests)
+    subprocess.run([sys.executable, str(HERE / "make_sync_set.py"), str(d / "V_sync360.mp4"), "--lag", "0.36",
+                    "--dur", "150"], check=True, env=env)
     Path("ch.txt").write_text(";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=3000\ntitle=Intro\n"
                               "[CHAPTER]\nTIMEBASE=1/1000\nSTART=3000\nEND=8000\ntitle=Track twee – é\n", "utf-8")
     ff("-i", "A.mp4", "-i", "ch.txt", "-map", "0", "-map_metadata", "1", "-map_chapters", "1", "-c", "copy", "Ch.mp4")

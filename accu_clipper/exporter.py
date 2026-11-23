@@ -15,7 +15,8 @@ from typing import Callable
 from .ffmpeg_tools import SourceInfo, ToolError, run_capture
 from .platform_paths import WINDOWS_RESERVED, no_window_kwargs
 from .layout import compute_layout
-from .model import Look, ExportSettings, Clip, Source, OUT_W, OUT_H, export_formats, format_size, format_tag
+from .model import (Look, ExportSettings, Clip, Source, OUT_W, OUT_H, av_offset_at, export_formats, format_size,
+                    format_tag)
 from .timecode import format_time
 
 
@@ -197,10 +198,29 @@ def encoder_args(info: SourceInfo, st: ExportSettings) -> tuple[list[str], str]:
 
 def audio_encode_args(info: SourceInfo, st: ExportSettings) -> list[str]:
     rate = info.audio_rate if info.audio_rate in (44100, 48000) else 48000
-    args = ["-c:a", st.audio_encoder if st.audio_encoder in ("aac", "aac_at") else "aac", "-b:a", f"{int(st.audio_bitrate_k)}k", "-ar", str(rate)]
+    enc = st.audio_encoder if st.audio_encoder in ("aac", "aac_at") else "aac"
+    args = ["-c:a", enc, "-b:a", f"{int(st.audio_bitrate_k)}k", "-ar", str(rate)]
+    if enc == "aac":
+        # 'perceptual noise substitution' van de ingebouwde encoder geeft bij luide, dichte muziek losse
+        # pieken tot enkele dB boven 0 dBFS (gemeten). Voor muziek voegt het niets toe: uit.
+        args += ["-aac_pns", "0"]
     if info.audio_channels > 2 or info.audio_channels == 0:
         args += ["-ac", "2"]
     return args
+
+
+def sync_shift(info: SourceInfo, st: ExportSettings, start: float, duration: float) -> float:
+    """Beeldachterstand die voor dit fragment gecorrigeerd moet worden (0 bij audio-only of zonder geluid)."""
+    if info.audio_only or not info.has_audio:
+        return 0.0
+    d = av_offset_at(st, start + duration / 2)
+    return d if abs(d) >= 0.0005 else 0.0
+
+
+def audio_window(start: float, shift: float) -> tuple[float, float]:
+    """(waar het geluid in de bron begint, stilte vooraan in s). Beeld op 'start' hoort bij geluid op start − shift."""
+    a = start - shift
+    return (a, 0.0) if a >= 0 else (0.0, -a)
 
 
 def build_command(ffmpeg: str, info: SourceInfo, start: float, duration: float, look: Look,
@@ -215,6 +235,17 @@ def build_command(ffmpeg: str, info: SourceInfo, start: float, duration: float, 
     audio = info.has_audio
     a_in = "0:a:0"
     prefix = ""
+    shift = sync_shift(info, st, start, duration)
+    if audio and shift:
+        # geluid uit een tweede, verschoven ingang van hetzelfde bestand (sync-correctie)
+        a_start, pad = audio_window(start, shift)
+        cmd += ["-ss", f"{a_start:.6f}", "-i", info.path]
+        idx = 1 + len(overlays)
+        if pad > 0:
+            prefix = f"[{idx}:a:0]adelay=delays={pad * 1000:.1f}:all=1[async];"
+            a_in = "async"
+        else:
+            a_in = f"{idx}:a:0"
     if info.audio_only and st.audio_visual == "waveform":
         prefix = "[0:a:0]asplit=2[aw][am];"   # één kopie voor de golfvorm, één voor het geluid
         a_in = "am"
@@ -319,9 +350,10 @@ def friendly_error(stderr_tail: str, returncode: int) -> str:
 
 def measure_audio(ffmpeg: str, info: SourceInfo, start: float, duration: float, st: ExportSettings,
                   cancel: threading.Event | None = None) -> dict | None:
-    """Meetpas voor normalisatie (alleen op het te exporteren fragment)."""
+    """Meetpas voor normalisatie (alleen op het te exporteren fragment, met de sync-verschuiving)."""
     if not info.has_audio or st.normalize == "off":
         return None
+    start = audio_window(start, sync_shift(info, st, start, duration))[0]
     if st.normalize == "loudness":
         af = f"loudnorm=I={_fmt(st.loudness_target)}:TP=-1.5:LRA=11:print_format=json"
     else:
@@ -348,11 +380,12 @@ def measure_audio(ffmpeg: str, info: SourceInfo, start: float, duration: float, 
 
 
 def run_ffmpeg(cmd: list[str], duration: float, progress: Callable[[float], None] | None,
-               cancel: threading.Event | None) -> None:
-    """Draait ffmpeg met voortgang; ondersteunt annuleren. Gooit Cancelled/ToolError."""
+               cancel: threading.Event | None, keep_lines: int = 60) -> list[str]:
+    """Draait ffmpeg met voortgang; ondersteunt annuleren. Gooit Cancelled/ToolError.
+    Geeft de laatste regels van stderr terug (voor meetfilters zoals ebur128)."""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             encoding="utf-8", errors="replace", bufsize=1, **no_window_kwargs())
-    tail: deque[str] = deque(maxlen=60)
+    tail: deque[str] = deque(maxlen=keep_lines)
 
     def drain_err():
         for line in proc.stderr:  # type: ignore[union-attr]
@@ -398,6 +431,7 @@ def run_ffmpeg(cmd: list[str], duration: float, progress: Callable[[float], None
         raise Cancelled()
     if proc.returncode != 0:
         raise ToolError(friendly_error("\n".join(tail), proc.returncode))
+    return list(tail)
 
 
 def fill_caption(template: str, source: Source, clip: Clip, index: int) -> str:

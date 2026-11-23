@@ -21,6 +21,8 @@ from .. import exporter as ex
 from .. import features as fe
 from .. import downloader as dl
 from .. import highlights as hl
+from .. import avsync
+from .. import fullset
 from ..ffmpeg_tools import ToolError, encoder_available, filter_available, find_tool, probe
 from ..model import (FORMATS, Clip, ExportSettings, FPS_OPTIONS, Look, PRESETS, Project, QUALITY_PROFILES,
                      format_size,
@@ -37,6 +39,8 @@ from .workers import Worker
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".mts", ".m2ts", ".ts", ".mpg", ".mpeg", ".wmv",
              ".flv", ".mxf", ".mp2", ".3gp"}
 PROJECT_EXT = ".accuclip"
+# per opname verschillend: niet meekopiëren bij 'toepassen op alle sets'
+PER_RECORDING = ("dj_name", "av_offset", "av_drift", "av_note", "full_start", "full_end")
 SUPPORT_DIR = app_data_dir()
 DEFAULT_OUT = str(videos_dir() / "Radio ACCU Clips")
 
@@ -93,7 +97,9 @@ class MainWindow(QMainWindow):
         self._text_cache: dict[tuple, str] = {}
         self.ffmpeg = self.ffprobe = None
         self.tool_error = ""
-        self.has_zscale = self.has_vt = self.has_aac_at = False
+        self.has_zscale = self.has_vt = self.has_aac_at = self.has_mp3 = False
+        self._sync_busy = False
+        self._sync_cands: dict[int, list] = {}      # id(Source) → [(offset, score)] van de laatste meting
         self.ytdlp_status = "yt-dlp: wordt gecontroleerd…"
         self._find_tools()
         self._build_ui()
@@ -111,6 +117,7 @@ class MainWindow(QMainWindow):
             self.has_zscale = filter_available(self.ffmpeg, "zscale")
             self.has_vt = encoder_available(self.ffmpeg, "h264_videotoolbox")
             self.has_aac_at = encoder_available(self.ffmpeg, "aac_at")
+            self.has_mp3 = encoder_available(self.ffmpeg, "libmp3lame")
         except ToolError as e:
             self.tool_error = str(e)
 
@@ -202,6 +209,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._tab_audio(), "Audio")
         self.tabs.addTab(self._tab_branding(), "Branding")
         self.tabs.addTab(self._tab_export(), "Export")
+        self.tabs.addTab(self._tab_full(), "Volledige set")
         return self.tabs
 
     # --- binding-helper: koppelt een widget aan een attribuut van het huidige clip.look / set.settings
@@ -555,6 +563,87 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.log, 1)
         return w
 
+    # --- tab: sync en volledige set (video, MP3)
+    def _tab_full(self) -> QWidget:
+        w = QWidget(); lay = QVBoxLayout(w)
+        gs = QGroupBox("Beeld en geluid synchroniseren"); fs = QFormLayout(gs)
+        fs.addRow(hint("Loopt het beeld achter op het geluid (je hoort de kick vóór je hem ziet)? Laat de app het verschil "
+                       "meten of stel het zelf in. De correctie geldt voor alle clips én voor de volledige export."))
+        self.sp_sync = spin(-5000, 5000, 10, 0, " ms")          # QDoubleSpinBox: waarde blijft een float
+        self.sp_sync.setToolTip("Positief = beeld loopt achter: het geluid wordt later gezet. Negatief = beeld loopt voor.")
+        self.bind(self.sp_sync, self._set, "av_offset", "spin", self._sync_changed, scale=1000)
+        self.sp_drift = spin(-5000, 5000, 10, 0, " ms per uur")
+        self.sp_drift.setToolTip("Voor opnames waarbij het verschil langzaam groter wordt (klokken van camera en "
+                                 "geluid lopen niet gelijk). Meestal 0.")
+        self.bind(self.sp_drift, self._set, "av_drift", "spin", self._sync_changed, scale=3_600_000)
+        fs.addRow("Beeld loopt achter", self.sp_sync)
+        fs.addRow("Oplopend verschil", self.sp_drift)
+        r = QHBoxLayout()
+        self.btn_sync_detect = QPushButton("Automatisch meten")
+        self.btn_sync_test = QPushButton("Testfragment bekijken")
+        self.btn_sync_test.setToolTip("Maakt een fragment van 20 s rond de afspeelkop mét de correctie en opent het "
+                                      "in je videospeler. Het voorbeeld in dit venster toont altijd het origineel.")
+        self.btn_sync_reset = QPushButton("Op 0")
+        r.addWidget(self.btn_sync_detect); r.addWidget(self.btn_sync_test); r.addWidget(self.btn_sync_reset)
+        fs.addRow(r)
+        self.sync_lbl = QLabel("Nog niet gemeten."); self.sync_lbl.setWordWrap(True)
+        fs.addRow(self.sync_lbl)
+        self.cb_sync_cand = QComboBox()
+        self.cb_sync_cand.setToolTip("De beat herhaalt zich, dus soms passen meerdere waarden. Kies er een en controleer "
+                                     "met het testfragment.")
+        fs.addRow("Alternatieven", self.cb_sync_cand)
+        fs.addRow(hint("Meten gebeurt op ±10 plekken in de set door de beweging en het licht in beeld (flitsende lampen, "
+                       "de DJ, het publiek) te vergelijken met de kicks en overgangen in het geluid. Dat is "
+                       "signaalanalyse op je eigen computer: kijk het resultaat altijd even na met het testfragment."))
+        lay.addWidget(gs)
+
+        gr = QGroupBox("Welk stuk"); fr = QFormLayout(gr)
+        self.ed_full_start, self.ed_full_end = QLineEdit(), QLineEdit()
+        self.ed_full_start.setPlaceholderText("0:00 (begin)"); self.ed_full_end.setPlaceholderText("leeg = tot het einde")
+        for e in (self.ed_full_start, self.ed_full_end):
+            e.setToolTip("Seconden (90), MM:SS (1:30) of HH:MM:SS (1:02:30). Enter om toe te passen.")
+        self.btn_full_in = QPushButton("= afspeelkop"); self.btn_full_out = QPushButton("= afspeelkop")
+        r1 = QHBoxLayout(); r1.addWidget(self.ed_full_start); r1.addWidget(self.btn_full_in)
+        r2 = QHBoxLayout(); r2.addWidget(self.ed_full_end); r2.addWidget(self.btn_full_out)
+        fr.addRow("Begin", r1); fr.addRow("Einde", r2)
+        fr.addRow(hint("Handig om het soundchecken vooraf of het opruimen achteraf weg te knippen."))
+        lay.addWidget(gr)
+
+        gl = QGroupBox("Geluidsniveau"); fl = QFormLayout(gl)
+        self.cb_master = QComboBox()
+        for i, (label, _, _) in enumerate(fullset.MASTER_PRESETS):
+            self.cb_master.addItem(label, i)
+        self.sp_ceiling = spin(-3.0, -0.1, 0.1, 1, " dBTP")
+        self.bind(self.sp_ceiling, self._set, "master_ceiling", "spin")
+        fl.addRow("Doel", self.cb_master); fl.addRow("Hoogste piek", self.sp_ceiling)
+        fl.addRow(hint("De hele set krijgt één vaste versterking, zodat de opbouw van je mix blijft zoals hij is. Pieken "
+                       "die daardoor te hoog worden, vangt een true-peak-limiter op. Na het exporteren meet de app het "
+                       "resultaat opnieuw en stuurt zo nodig bij: er komt geen clipping in het bestand. −1 dBTP laat "
+                       "ruimte voor de omzetting die YouTube, Spotify en SoundCloud zelf nog doen."))
+        lay.addWidget(gl)
+
+        gx = QGroupBox("Exporteren (naar de exportmap)"); fx = QFormLayout(gx)
+        self.cb_vmode = QComboBox()
+        self.cb_vmode.addItem("Beeld ongewijzigd kopiëren (snel, geen kwaliteitsverlies)", "copy")
+        self.cb_vmode.addItem("Beeld opnieuw coderen (exact knippen, H.264, trager)", "reencode")
+        self.bind(self.cb_vmode, self._set, "full_video_mode", "combo")
+        self.btn_full_video = QPushButton("Exporteer volledige video (MP4)")
+        self.cb_afmt = QComboBox()
+        for k, (label, _) in fullset.AUDIO_FORMATS.items():
+            self.cb_afmt.addItem(label, k)
+        self.bind(self.cb_afmt, self._set, "audio_format", "combo")
+        self.btn_full_audio = QPushButton("Exporteer audio")
+        for b in (self.btn_full_video, self.btn_full_audio):
+            b.setMinimumHeight(32)
+        fx.addRow("Beeld", self.cb_vmode); fx.addRow(self.btn_full_video)
+        fx.addRow("Audioformaat", self.cb_afmt); fx.addRow(self.btn_full_audio)
+        fx.addRow(hint("Bij 'Beeld ongewijzigd' begint de video op het dichtstbijzijnde sleutelframe vóór het gekozen "
+                       "begin (meestal minder dan 2 s); het geluid loopt altijd exact gelijk. De titel en DJ-naam "
+                       "(tab Branding) komen in de MP3-tags."))
+        lay.addWidget(gx)
+        lay.addStretch(1)
+        return scroll_tab(w)
+
     # ------------------------------------------------------------------ menu en verbindingen
     def _build_menu(self) -> None:
         m = self.menuBar().addMenu("Bestand")
@@ -621,6 +710,17 @@ class MainWindow(QMainWindow):
         self.btn_export.clicked.connect(lambda: self.start_export([self.cur_src] if self.cur_src else []))
         self.btn_export_all.clicked.connect(lambda: self.start_export(list(self.project.sources)))
         self.btn_apply_set.clicked.connect(self.apply_set_all)
+        self.btn_sync_detect.clicked.connect(self.detect_sync)
+        self.btn_sync_test.clicked.connect(self.sync_test)
+        self.btn_sync_reset.clicked.connect(lambda: self._set_sync(0.0, 0.0))
+        self.cb_sync_cand.currentIndexChanged.connect(self._sync_candidate)
+        self.cb_master.currentIndexChanged.connect(self._master_changed)
+        self.ed_full_start.editingFinished.connect(lambda: self._full_field("start"))
+        self.ed_full_end.editingFinished.connect(lambda: self._full_field("end"))
+        self.btn_full_in.clicked.connect(lambda: self._full_point("start"))
+        self.btn_full_out.clicked.connect(lambda: self._full_point("end"))
+        self.btn_full_video.clicked.connect(lambda: self.start_full_export("video"))
+        self.btn_full_audio.clicked.connect(lambda: self.start_full_export("audio"))
         self.project.out_dir = str(self.settings_store.value("out_dir", DEFAULT_OUT))
         self.ed_out.setText(self.project.out_dir)
 
@@ -1503,6 +1603,7 @@ class MainWindow(QMainWindow):
             i = self.cb_dur.findData(int(d)) if float(d).is_integer() else -1
             self.cb_dur.setCurrentIndex(i if i >= 0 else self.cb_dur.findData(-1))
             self.sp_dur.setValue(d)
+            self._refresh_full(st)
         self._loading = False
         self._update_profile_help()
         self._sync_formats()
@@ -1570,6 +1671,20 @@ class MainWindow(QMainWindow):
         self.sp_lufs.setEnabled(has_src and st.normalize == "loudness")
         self.sp_peak.setEnabled(has_src and st.normalize == "peak")
         self.sp_dur.setEnabled(has_src and self.cb_dur.currentData() == -1)
+        av = has_src and src.info.has_audio and not src.info.audio_only
+        for w in (self.sp_sync, self.sp_drift, self.btn_sync_reset, self.cb_sync_cand):
+            w.setEnabled(av)
+        self.cb_sync_cand.setEnabled(av and self.cb_sync_cand.count() > 1)
+        self.btn_sync_detect.setEnabled(av and bool(self.ffmpeg) and not self._sync_busy)
+        self.btn_sync_test.setEnabled(av and bool(self.ffmpeg))
+        for w in (self.ed_full_start, self.ed_full_end, self.btn_full_in, self.btn_full_out, self.cb_master,
+                  self.sp_ceiling, self.cb_afmt):
+            w.setEnabled(has_src)
+        self.sp_ceiling.setEnabled(has_src and st.master_mode != "off")
+        self.cb_vmode.setEnabled(has_src and not src.info.audio_only)
+        self.btn_full_video.setEnabled(has_src and not src.info.audio_only and bool(self.ffmpeg) and not busy)
+        self.btn_full_audio.setEnabled(has_src and src.info.has_audio and bool(self.ffmpeg) and not busy
+                                       and (self.has_mp3 or not st.audio_format.startswith("mp3")))
         self.btn_export.setEnabled(has_src and bool(self.ffmpeg) and not busy)
         self.btn_export_all.setEnabled(bool(self.project.sources) and bool(self.ffmpeg) and not busy)
 
@@ -1633,11 +1748,14 @@ class MainWindow(QMainWindow):
                                 "De DJ-naam blijft per set behouden.") != QMessageBox.StandardButton.Yes:
             return
         for s in others:
-            keep = s.settings.dj_name
+            keep = {k: getattr(s.settings, k) for k in PER_RECORDING}
             s.settings = copy.deepcopy(st)
-            s.settings.dj_name = keep
+            for k, v in keep.items():
+                setattr(s.settings, k, v)
         self.project.defaults = copy.deepcopy(st)
-        self.project.defaults.dj_name = ""
+        fresh = ExportSettings()
+        for k in PER_RECORDING:
+            setattr(self.project.defaults, k, getattr(fresh, k))
         self.status_lbl.setText("Instellingen toegepast; nieuwe sets gebruiken deze ook.")
 
     def show_exact(self) -> None:
@@ -1678,6 +1796,227 @@ class MainWindow(QMainWindow):
             dlg.exec()
         self._start_worker(Worker(job), done, lambda m: QMessageBox.warning(self, "Exportframe", m),
                            "Exportframe maken…", track_bg=False)
+
+    # ------------------------------------------------------------------ sync en volledige set
+    def _refresh_full(self, st: ExportSettings) -> None:
+        idx = 0
+        for i, (_, lufs, mode) in enumerate(fullset.MASTER_PRESETS):
+            if mode == st.master_mode and (mode != "loudness" or abs(lufs - st.master_lufs) < 0.05):
+                idx = i
+                break
+        self.cb_master.setCurrentIndex(idx)
+        self.ed_full_start.setText(format_time(st.full_start, 0) if st.full_start > 0 else "")
+        self.ed_full_end.setText(format_time(st.full_end, 0) if st.full_end > 0 else "")
+        self.sync_lbl.setText(st.av_note or self._sync_text(st))
+        self._fill_candidates(self._sync_cands.get(id(self.cur_src), []))
+
+    def _fill_candidates(self, cands: list) -> None:
+        was = self._loading
+        self._loading = True
+        self.cb_sync_cand.clear()
+        for i, (off, score) in enumerate(cands):
+            self.cb_sync_cand.addItem(f"{off * 1000:+.0f} ms" + (" (beste)" if i == 0 else f" ({score:.0%})"), off)
+        self._loading = was
+
+    def _sync_text(self, st: ExportSettings) -> str:
+        txt = "Correctie: " + avsync.describe_offset(st.av_offset) + "."
+        if abs(st.av_drift) > 1e-9:
+            txt += f" Oplopend: {st.av_drift * 3_600_000:+.0f} ms per uur."
+        return txt if (st.av_offset or st.av_drift) else "Nog niet gemeten; er wordt niets gecorrigeerd."
+
+    def _sync_changed(self) -> None:
+        st = self._set()
+        if st is not None:
+            st.av_note = ""
+            self.sync_lbl.setText(self._sync_text(st))
+
+    def _set_sync(self, offset: float, drift: float) -> None:
+        st = self._set()
+        if st is None:
+            return
+        st.av_offset, st.av_drift = round(offset, 3), drift
+        self.refresh_binds()
+        self._sync_changed()
+
+    def _sync_candidate(self, i: int) -> None:
+        if self._loading or i < 0:
+            return
+        val = self.cb_sync_cand.currentData()
+        st = self._set()
+        if val is None or st is None:
+            return
+        self._loading = True
+        st.av_offset = float(val)
+        self._loading = False
+        self.refresh_binds()
+        self.sync_lbl.setText(self._sync_text(st) + " (alternatief gekozen; controleer met het testfragment)")
+
+    def detect_sync(self) -> None:
+        src = self.cur_src
+        if not src or not src.info or not self.ffmpeg or self._sync_busy:
+            return
+        info = src.info
+
+        def job(wk: Worker):
+            return avsync.detect(self.ffmpeg, info, progress=lambda f, t: wk.report(f, t), cancel=wk.cancel_event)
+
+        def done(res: avsync.SyncResult, s=src):
+            self._sync_busy = False
+            s.settings.av_offset, s.settings.av_drift = res.offset, res.drift
+            txt = (f"Gemeten: {avsync.describe_offset(res.offset)} (betrouwbaarheid {res.level}, "
+                   f"{res.confidence:.0%}).")
+            if res.note:
+                txt += " " + res.note
+            s.settings.av_note = txt
+            self._sync_cands[id(s)] = list(res.candidates)
+            if s is self.cur_src:
+                self.refresh_binds()
+                self.sync_lbl.setText(txt)
+                self._fill_candidates(res.candidates)
+            self.status_lbl.setText("Sync gemeten: " + avsync.describe_offset(res.offset) + ".")
+            self._update_enablement()
+
+        def failed(msg):
+            self._sync_busy = False
+            QMessageBox.warning(self, "Sync meten", msg)
+            self._update_enablement()
+        self._sync_busy = True
+        self._update_enablement()
+        w = Worker(job)
+        w.cancelled.connect(lambda: setattr(self, "_sync_busy", False))
+        self._start_worker(w, done, failed, f"Sync meten: {src.name}…", track_bg=False)
+
+    def sync_test(self) -> None:
+        src = self.cur_src
+        if not src or not src.info or not self.ffmpeg:
+            return
+        info, st = src.info, copy.deepcopy(src.settings)
+        t = self.preview.player.position() / 1000.0
+        if t <= 0:
+            t = min(info.duration / 2, 600.0)
+        out = os.path.join(self._tmp, f"synctest_{int(st.av_offset * 1000):+d}ms.mp4")
+
+        def job(wk: Worker):
+            return fullset.render_sync_test(self.ffmpeg, info, st, t, out, cancel=wk.cancel_event)
+
+        def done(path):
+            self.status_lbl.setText(f"Testfragment rond {format_time(t, 0)} met {st.av_offset * 1000:+.0f} ms correctie.")
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        self._start_worker(Worker(job), done, lambda m: QMessageBox.warning(self, "Testfragment", m),
+                           "Testfragment maken…", track_bg=False)
+
+    def _master_changed(self, i: int) -> None:
+        st = self._set()
+        if st is None or self._loading or i < 0:
+            return
+        _, lufs, mode = fullset.MASTER_PRESETS[self.cb_master.currentData()]
+        st.master_mode = mode
+        if mode == "loudness":
+            st.master_lufs = lufs
+        self._update_enablement()
+
+    def _full_field(self, which: str) -> None:
+        st, src = self._set(), self.cur_src
+        if st is None or not src or not src.info:
+            return
+        ed = self.ed_full_start if which == "start" else self.ed_full_end
+        text = ed.text().strip()
+        if not text:
+            val = 0.0
+        else:
+            try:
+                val = parse_time(text)
+            except ValueError:
+                self.status_lbl.setText("Ongeldige tijd. Gebruik bijv. 90, 1:30 of 1:02:30.")
+                return
+        val = max(0.0, min(val, src.info.duration))
+        if which == "start":
+            st.full_start = val
+        else:
+            st.full_end = 0.0 if val >= src.info.duration - 0.05 else val
+        if st.full_end and st.full_end <= st.full_start + 0.5:
+            self.status_lbl.setText("Het einde moet ná het begin liggen.")
+        self._refresh_full_fields(st)
+
+    def _refresh_full_fields(self, st: ExportSettings) -> None:
+        self.ed_full_start.setText(format_time(st.full_start, 0) if st.full_start > 0 else "")
+        self.ed_full_end.setText(format_time(st.full_end, 0) if st.full_end > 0 else "")
+
+    def _full_point(self, which: str) -> None:
+        st = self._set()
+        if st is None:
+            return
+        t = self.preview.player.position() / 1000.0
+        if which == "start":
+            st.full_start = max(0.0, t)
+        else:
+            st.full_end = t
+        self._refresh_full_fields(st)
+
+    def start_full_export(self, kind: str) -> None:
+        src = self.cur_src
+        if self.export_worker is not None or not src or not src.info:
+            return
+        if not self.ffmpeg:
+            QMessageBox.critical(self, "FFmpeg niet gevonden", self.tool_error)
+            return
+        if not os.path.isfile(src.path):
+            QMessageBox.warning(self, "Export niet mogelijk", f"Bronbestand niet beschikbaar: {src.path}")
+            return
+        st = src.settings
+        if kind == "audio" and st.audio_format.startswith("mp3") and not self.has_mp3:
+            QMessageBox.warning(self, "MP3 niet beschikbaar", "Deze FFmpeg kan geen MP3 maken (libmp3lame ontbreekt). "
+                                "Kies WAV of FLAC, of " + reinstall_hint())
+            return
+        out_dir = self.project.out_dir
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except OSError as e:
+            QMessageBox.warning(self, "Exportmap", f"De exportmap kan niet worden gemaakt:\n{e}")
+            return
+        snap = copy.deepcopy(src)            # instellingen vastleggen; verder bewerken tijdens export mag
+        what = "volledige video" if kind == "video" else "audio"
+
+        def job(wk: Worker):
+            rep = lambda f, t: wk.report(f, f"{snap.name}: {t}")
+            if kind == "video":
+                return fullset.export_video(self.ffmpeg, snap, out_dir, rep, wk.cancel_event)
+            return fullset.export_audio(self.ffmpeg, snap, out_dir, rep, wk.cancel_event)
+        worker = Worker(job)
+        self.export_worker = worker
+        self.log.appendPlainText(f"— Export {what} gestart: {src.name}")
+        self._workers.add(worker)
+        worker.finished.connect(lambda w=worker: self._workers.discard(w))
+        worker.progress.connect(lambda f, t, wk=worker: self._on_progress(wk, f, t))
+        worker.done.connect(lambda res: self._full_done(what, res))
+        worker.failed.connect(lambda m: self._export_end(f"Export {what} mislukt: {m}"))
+        worker.cancelled.connect(lambda: self._export_end(f"Export {what} geannuleerd."))
+        self.pbar.setValue(0); self.pbar.show(); self.btn_cancel.show()
+        self._update_enablement()
+        worker.start()
+
+    def _full_done(self, what: str, res) -> None:
+        path = res if isinstance(res, str) else res.path
+        lines = [f"✓ {os.path.basename(path)}"]
+        if not isinstance(res, str):
+            lines.append("  " + res.summary())
+            lines += ["  ⚠ " + w for w in res.warnings]
+        for l in lines:
+            self.log.appendPlainText(l)
+        self._export_end(f"Export {what} klaar: {os.path.basename(path)}")
+        box = QMessageBox(self)
+        box.setWindowTitle("Export klaar")
+        text = f"{os.path.basename(path)}\n\nin {self.project.out_dir}"
+        if not isinstance(res, str):
+            text += "\n\n" + res.summary().replace(" · ", "\n")
+            if res.warnings:
+                text += "\n\n" + "\n\n".join(res.warnings)
+        box.setText(text)
+        opener = box.addButton(f"Toon in {file_manager_name()}", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Sluiten", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is opener:
+            self.open_out_dir()
 
     # ------------------------------------------------------------------ export
     def choose_out_dir(self) -> None:

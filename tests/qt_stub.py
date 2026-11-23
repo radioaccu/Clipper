@@ -77,6 +77,8 @@ class QComboBox(_Strict, Base):
     def currentIndex(self): return self.idx
     def currentData(self): return self.items[self.idx][1] if 0 <= self.idx < len(self.items) else None
     def blockSignals(self, b): pass
+    def clear(self): self.items = []; self.idx = -1
+    def count(self): return len(self.items)
 
 
 class _Value(_Strict, Base):

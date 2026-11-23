@@ -3,5 +3,5 @@
 cd "$(dirname "$0")/.."
 export ACCU_TEST_MEDIA="${ACCU_TEST_MEDIA:-/tmp/t}"
 [ -f "$ACCU_TEST_MEDIA/A.mp4" ] || python3 tests/make_media.py "$ACCU_TEST_MEDIA"
-python3 -W ignore -m unittest tests.test_analysis tests.test_export tests.test_links tests.test_platform -v 2>&1 | tail -70
+python3 -W ignore -m unittest tests.test_analysis tests.test_export tests.test_links tests.test_platform tests.test_sync -v 2>&1 | tail -70
 python3 -W ignore tests/smoke_gui.py

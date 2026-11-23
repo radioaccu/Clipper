@@ -102,6 +102,23 @@ class ExportSettings:
     export_cover: bool = False       # omslagfoto (JPG, in het formaat van de clip) uit het midden van de clip
     caption_enabled: bool = False    # tekstbestand met Instagram-bijschrift
     caption_template: str = DEFAULT_CAPTION
+    # beeld/geluid-synchronisatie (geldt voor clips én de volledige set)
+    av_offset: float = 0.0           # s; > 0 = beeld loopt achter op het geluid (geluid wordt later gezet)
+    av_drift: float = 0.0            # s per s; offset op bron-tijd t = av_offset + av_drift·t
+    av_note: str = ""                # uitslag van de laatste automatische meting
+    # volledige set (video en/of audio, zie fullset.py)
+    full_start: float = 0.0
+    full_end: float = 0.0            # 0 = tot het einde
+    full_video_mode: str = "copy"    # "copy" (beeld ongewijzigd, snel) | "reencode" (exact knippen, H.264)
+    master_mode: str = "loudness"    # "loudness" (LUFS + true-peak-limiter) | "peak" (alleen veilig niveau) | "off"
+    master_lufs: float = -14.0
+    master_ceiling: float = -1.0     # dBTP (true peak)
+    audio_format: str = "mp3_320"    # mp3_320 | mp3_v0 | wav24 | flac
+
+
+def av_offset_at(st: "ExportSettings", t: float) -> float:
+    """Beeldachterstand (s) op bron-tijd t."""
+    return float(st.av_offset) + float(st.av_drift) * t
 
 
 # naam → (encoder, crf, preset, vt_quality, lossless, uitleg)

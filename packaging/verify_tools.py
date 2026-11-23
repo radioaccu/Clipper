@@ -22,8 +22,8 @@ def main() -> None:
     ff = x("ffmpeg")
     encoders = run([ff, "-hide_banner", "-encoders"])
     filters = run([ff, "-hide_banner", "-filters"])
-    need_enc = ["libx264", "libx265", "aac"] + (["h264_videotoolbox", "aac_at"] if IS_MAC else [])
-    need_flt = ["zscale", "tonemap", "showwaves", "alimiter", "loudnorm", "colorchannelmixer", "overlay", "fade"]
+    need_enc = ["libx264", "libx265", "aac", "libmp3lame", "flac", "pcm_s24le"] + (["h264_videotoolbox", "aac_at"] if IS_MAC else [])
+    need_flt = ["zscale", "tonemap", "showwaves", "alimiter", "loudnorm", "colorchannelmixer", "overlay", "fade", "ebur128", "astats", "atempo", "adelay"]
     missing = [e for e in need_enc if f" {e} " not in encoders] + [f for f in need_flt if f" {f} " not in filters]
     if missing:
         raise SystemExit(f"MISLUKT: deze FFmpeg mist: {', '.join(missing)}")
