@@ -77,7 +77,7 @@ jobs:
         continue-on-error: true
         run: |
           export PATH="$PWD/build/tools:$PATH"
-          ACCU_TEST_MEDIA="$MEDIA" python .github/scripts/logged.py --warn "Tests" -- python -W ignore -m unittest tests.test_analysis tests.test_export tests.test_links tests.test_platform -v
+          ACCU_TEST_MEDIA="$MEDIA" python .github/scripts/logged.py --warn "Tests" -- python -W ignore -m unittest tests.test_analysis tests.test_export tests.test_links tests.test_platform tests.test_sync -v
 
       - name: Rooktest met echte Qt (zonder scherm)
         id: qt

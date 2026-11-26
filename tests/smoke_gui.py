@@ -119,6 +119,38 @@ new = sorted(set(os.listdir(w.project.out_dir)) - before)
 assert any(f.endswith(".mp4") for f in new) and any(f.endswith("_cover.jpg") for f in new) \
     and any(f.endswith("_bijschrift.txt") for f in new), new
 print("links + audio-only via interfacelogica:", [f for f in new if not f.startswith("Radio_ACCU")])
+# 9. tab 'Volledige set': sync meten → alternatief → testfragment → volledige video en MP3
+w.add_files([os.path.join(MEDIA, "V_sync360.mp4")])
+vs = w.project.sources[-1]
+w.on_select_source(w.project.sources.index(vs)); assert w.cur_src is vs
+w.detect_sync()
+assert 0.33 < vs.settings.av_offset < 0.42, vs.settings.av_offset
+assert abs(w.sp_sync.value() - vs.settings.av_offset * 1000) < 1 and isinstance(vs.settings.av_offset, float)
+assert w.cb_sync_cand.count() >= 1 and "achter" in vs.settings.av_note, vs.settings.av_note
+w.sp_sync.setValue(250.0); w.sp_sync.valueChanged.emit(250.0)                # handmatig via bind()
+assert abs(vs.settings.av_offset - 0.25) < 1e-9 and vs.settings.av_note == ""
+w.cb_sync_cand.setCurrentIndex(0); w._sync_candidate(0)                       # terug naar de gemeten waarde
+assert 0.33 < vs.settings.av_offset < 0.42
+w.preview.player.setPosition(60_000); w.sync_test()
+assert any(f.startswith("synctest_") for f in os.listdir(w._tmp)), os.listdir(w._tmp)
+w.ed_full_start.setText("0:20"); w._full_field("start"); w.ed_full_end.setText("1:50"); w._full_field("end")
+assert (vs.settings.full_start, vs.settings.full_end) == (20.0, 110.0)
+w.cb_master.setCurrentIndex(2); w._master_changed(2)                          # −16 LUFS
+assert vs.settings.master_mode == "loudness" and vs.settings.master_lufs == -16.0
+before = set(os.listdir(w.project.out_dir))
+w.start_full_export("video"); w.start_full_export("audio")
+new = sorted(set(os.listdir(w.project.out_dir)) - before)
+assert "V_sync360_volledig_sync.mp4" in new and "V_sync360_master_-16LUFS.mp3" in new, new
+assert not any(".part" in f for f in new), new
+dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                            os.path.join(w.project.out_dir, "V_sync360_volledig_sync.mp4")],
+                           capture_output=True, text=True).stdout)
+assert abs(dur - 90) < 0.6, dur
+# 'toepassen op alle sets' neemt de sync van deze opname niet mee
+w.apply_set_all()
+assert all(x.settings.av_offset == 0 for x in w.project.sources if x is not vs)
+assert w.project.defaults.av_offset == 0 and w.project.defaults.full_start == 0
+print("volledige set via interfacelogica:", new)
 ev = type("E", (), {"accept": lambda s: None, "ignore": lambda s: None})()
 w.closeEvent(ev)
 print("GUI-rooktest (nep-Qt): OK")

@@ -1,7 +1,33 @@
-# Radio ACCU Clipper 2.3
+# Radio ACCU Clipper 2.4
 
 Desktopapp voor **macOS en Windows** (PySide6 + FFmpeg) om uit lange DJ-sets clips te maken voor Instagram, Reels, TikTok, YouTube en meer (4:5, 9:16, 3:4, 1:1 en 16:9).
 Alles draait op je eigen computer: geen cloud, abonnement of watermerk. Bronvideo's worden alleen gelezen.
+
+## Sync en volledige set (nieuw in 2.4)
+
+Nieuwe tab **Volledige set**:
+
+- **Beeld en geluid synchroniseren.** Loopt het beeld achter op het geluid (typisch bij OBS, capturekaarten of camera +
+  losse mixer-opname)? Klik **Automatisch meten**: op ±10 plekken in de set vergelijkt de app beweging en licht in beeld
+  (flitsende lampen, de DJ, het publiek) met de kicks en overgangen in het geluid. Een filter haalt het herhalende deel
+  van de beat weg, zodat alleen eenmalige momenten (fills, drops, strobo) de doorslag geven. Je krijgt de gemeten waarde,
+  een betrouwbaarheid en eventuele alternatieven. Ook een langzaam oplopend verschil (klok-drift) wordt herkend.
+  Controleer met **Testfragment bekijken** (20 s rond de afspeelkop, mét correctie). De correctie geldt voor alle clips
+  én de volledige export. Het voorbeeld in het venster speelt altijd het origineel.
+- **Volledige video**: hele set (of een stuk, begin/einde instelbaar) met gecorrigeerde sync en geluid op niveau.
+  Standaard wordt het beeld ongewijzigd gekopieerd (snel, geen kwaliteitsverlies); kies *opnieuw coderen* om exact te knippen.
+- **Audio**: MP3 320 kbps (of V0), WAV 24-bit of FLAC, met titel en DJ-naam in de tags.
+- **Geluidsniveau**: −14 LUFS (streaming, standaard), −9 LUFS (luid), −16 LUFS, *alleen pieken veilig* of *niets aanpassen*.
+  De hele set krijgt één vaste versterking (de opbouw van je mix blijft); te hoge pieken vangt een true-peak-limiter
+  (4× oversampling) op. Na het coderen meet de app het resultaat opnieuw en stuurt zo nodig bij, zodat het bestand
+  onder het plafond (standaard −1 dBTP) blijft: geen clipping. Is de opname zelf al afgetopt, dan meldt de app dat.
+- De ingebouwde AAC-encoder maakt nu geen losse pieken boven 0 dBFS meer bij luide muziek (PNS staat uit); dat geldt ook voor clips.
+
+Getest met nagebootste opnames met bekende vertraging (+0,36 s, −0,2 s, 0, en 0,2 s + 2 s/uur drift): gemeten binnen
+±25 ms (een half frame: zo ziet een kijker het ook), na correctie ≈ 0. Mastering getest op MP3/WAV/FLAC/AAC: loudness binnen
+0,6 LU van het doel, geen sample op of boven 0 dBFS. **Niet getest**: echte opnames (de sync-meting is signaalanalyse en
+werkt het best als er licht of beweging op de muziek in beeld is; bij een stilstaand beeld kan hij niets meten) en de nieuwe
+tab in echte Qt (de GitHub-bouw draait de rooktest).
 
 ## Beeldformaten (nieuw in 2.3)
 
@@ -161,7 +187,7 @@ audio-only bronnen met golfvorm · omslagfoto · bijschrift.
 
 ## Wat is getest (Linux-omgeving, FFmpeg echt uitgevoerd)
 
-`bash tests/run_all.sh` — 65 tests + rooktest, alle geslaagd:
+`bash tests/run_all.sh` — 107 tests + rooktest, alle geslaagd:
 - Exports op test-bronnen (liggend, rotatiemetadata, anamorf 4:3-pixels, 59,94 fps, HDR PQ, zonder audio): altijd **1080×1350**, yuv420p, h264.
 - Crop-positie (links/midden/rechts, zoom) en fit-modus (zwarte randen, juiste hoogte, ook bij anamorfe bron) gecontroleerd op pixelwaarden.
 - FPS: bron (ook 59,94), 24, 25, 30, 50, 60 gemeten. Duur binnen 0,1 s.
